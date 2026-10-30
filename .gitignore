@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Gaffer scripts (contains API keys)
+scripts/config.js
