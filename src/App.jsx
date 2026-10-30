@@ -140,6 +140,7 @@ const db = {
       league:       r.league,
       fixtures:     r.fixtures,
       mockResults:  r.mock_results || null,
+      results:      r.results || null,
       week:         r.week,
       locked:       r.locked,
       winnersFound: r.winners_found,
@@ -152,6 +153,7 @@ const db = {
       league:        round.league,
       fixtures:      round.fixtures,
       mock_results:  round.mockResults || null,
+      results:       round.results || null,
       week:          round.week,
       locked:        round.locked,
       winners_found: round.winnersFound,
@@ -177,7 +179,7 @@ const db = {
     return sb.insert("submissions", { username, entry_name: entryName, preds });
   },
   async clearSubs() {
-    return sb.del("submissions", "id=gte.0");
+    return sb.del("submissions", "submitted_at=gte.1970-01-01");
   },
   async clearAll() {
     await db.clearSubs();
@@ -256,24 +258,6 @@ async function seedMockData() {
   return "Done — refresh the page.";
 }
 window.seedMockData = seedMockData;
-
-// ─── Claude API ───────────────────────────────────────────────────────────────
-async function callClaude(prompt) {
-  // Calls our Netlify serverless function which proxies to Anthropic server-side.
-  // The API key lives in Netlify environment variables, never in the browser.
-  const res = await fetch("/api/claude", {
-    method:"POST",
-    headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify({
-      model:"claude-sonnet-4-20250514", max_tokens:1000,
-      tools:[{type:"web_search_20250305",name:"web_search"}],
-      messages:[{role:"user",content:prompt}],
-    }),
-  });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  const data = await res.json();
-  return data.content.map(b=>b.type==="text"?b.text:"").join("");
-}
 
 // ─── Scoring helpers ──────────────────────────────────────────────────────────
 function isPerfect(entry, results) {
@@ -506,34 +490,29 @@ export default function App() {
 
   // ── Reveal ────────────────────────────────────────────────────────────────
   async function startReveal() {
-    setLoading(true); setLoadMsg("Checking match results…"); setError("");
+    setLoading(true); setLoadMsg("Checking results…"); setError("");
     try {
+      const fresh = (await db.getRound()) || round;
       let parsed;
-      if (round.mockResults) {
-        parsed = round.mockResults;
+      if (fresh.mockResults) {
+        parsed = fresh.mockResults;               // test mode
       } else {
-        const fixtureList = round.fixtures.map((f,i)=>`${i+1}. ${f.home} vs ${f.away} (${f.date})`).join("\n");
-        const text = await callClaude(`
-Check the final results of these ${round.league.name} fixtures:
-${fixtureList}
-Return ONLY a JSON array of exactly 5 objects in order:
-{ result: "home"|"draw"|"away"|"upcoming", score: "2-1" or null }
-Use "upcoming" if the match has not yet been played.
-No markdown, no extra text.`);
-        parsed = JSON.parse(text.replace(/```json|```/g,"").trim());
-        if (!Array.isArray(parsed)||parsed.length!==5) throw new Error("Bad response");
-        const stillPending = parsed.filter(r=>r.result==="upcoming").length;
-        if (stillPending>0) {
-          setError(`${stillPending} match${stillPending>1?"es are":" is"} still to be played.`);
+        parsed = fresh.results;                   // saved by update-results.js
+        if (!Array.isArray(parsed) || parsed.length !== fresh.fixtures.length) {
+          setError("Results aren't in yet. They're picked up automatically once the matches have finished, so check back later.");
+          setLoading(false); return;
+        }
+        const pending = parsed.filter(r=>r.result==="upcoming").length;
+        if (pending>0) {
+          setError(`${pending} match${pending>1?"es are":" is"} still to be played, or the result hasn't come through yet.`);
           setLoading(false); return;
         }
       }
       await db.patchRound({ locked:true });
-      const r = await db.getRound();
-      setRound(r);
+      setRound(await db.getRound());
       setResults(parsed); setView("reveal");
-    } catch(e) {
-      if (!e.message?.startsWith("Bad")) setError("Couldn't fetch results — try again later.");
+    } catch {
+      setError("Couldn't load results — try again later.");
     }
     setLoading(false);
   }
@@ -654,6 +633,13 @@ No markdown, no extra text.`);
                   {subs.length} entr{subs.length!==1?"ies":"y"} · {round.locked?"🔒 Locked":"🟢 Open"}
                   {round.winnersFound?" · 🏆 Winner found":""}
                 </div>
+                <div style={{fontSize:13,color:"var(--muted)",marginBottom:12}}>
+                  {round.mockResults
+                    ? "Results: test mode"
+                    : Array.isArray(round.results)
+                      ? `Results: ${round.results.filter(r=>r.result!=="upcoming").length}/${round.fixtures.length} final`
+                      : "Results: not checked yet"}
+                </div>
                 <div style={{display:"flex",flexDirection:"column",gap:6}}>
                   {round.fixtures.map((f,i)=>(
                     <div key={i} style={{fontSize:13,color:"var(--text)",display:"flex",gap:8}}>
@@ -678,10 +664,13 @@ No markdown, no extra text.`);
                 🔄 Refresh from Database
               </Btn>
               <button style={{...S.dangerLink,color:"var(--green)",marginTop:4}} onClick={async()=>{
-                setLoading(true); setLoadMsg("Seeding mock data…");
-                await seedMockData();
-                const [r,s]=await Promise.all([db.getRound(),db.getSubs()]);
-                setRound(r); setSubs(s); setResults(null); setView("lobby"); setLoading(false);
+                setLoading(true); setLoadMsg("Seeding mock data…"); setError("");
+                try {
+                  await seedMockData();
+                  const [r,s]=await Promise.all([db.getRound(),db.getSubs()]);
+                  setRound(r); setSubs(s); setResults(null); setView("lobby");
+                } catch(e) { setError("Couldn't seed mock data: "+e.message); }
+                setLoading(false);
               }}>🧪 Seed mock data (test mode)</button>
               <button style={S.dangerLink} onClick={()=>requireAdmin("reset")}>
                 ⚠️ Full reset (clears all data)
@@ -691,7 +680,8 @@ No markdown, no extra text.`);
 
           <div style={{fontSize:12,color:"var(--muted)",textAlign:"center",lineHeight:1.7,marginTop:8}}>
             Fixtures are fetched automatically every Monday at 7am<br/>
-            by the <code style={{color:"var(--gold)"}}>fetch-fixtures.js</code> script on your machine.
+            by the <code style={{color:"var(--gold)"}}>fetch-fixtures.js</code> script on your machine.<br/>
+            Results are saved by <code style={{color:"var(--gold)"}}>update-results.js</code> once the matches finish.
           </div>
         </Screen>
       )}
