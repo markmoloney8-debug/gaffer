@@ -31,8 +31,8 @@ styleEl.textContent = css;
 document.head.appendChild(styleEl);
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
-const ADMIN_PIN         = "1234";                        // ← change this
-const INVITE_CODE       = "GAFFER2025";                  // ← share with your group
+const ADMIN_PIN         = "085419";                        // ← change this
+const INVITE_CODE       = "GAFFERPYW2026";                  // ← share with your group
 const MAX_ENTRIES       = 5;
 const SB_URL            = "https://oszrnwhyvmvccxxepsnm.supabase.co";
 const SB_KEY            = "sb_publishable_V9itVh6Qu_ThqCfAEV5SBA_PagJsoG4";
