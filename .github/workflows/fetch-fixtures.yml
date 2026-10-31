@@ -1,0 +1,31 @@
+name: Fetch weekly fixtures
+
+# WARNING: this replaces the current round and clears all entries.
+on:
+  schedule:
+    - cron: "0 7 * * 1"       # Mondays 07:00 UTC (08:00 in UK summer time)
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type WIPE to replace the current round and delete all entries'
+        required: true
+
+concurrency:
+  group: gaffer-round
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    if: github.event_name == 'schedule' || github.event.inputs.confirm == 'WIPE'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Pick this week's fixtures
+        env:
+          FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
+          SB_URL: https://oszrnwhyvmvccxxepsnm.supabase.co
+          SB_KEY: sb_publishable_V9itVh6Qu_ThqCfAEV5SBA_PagJsoG4
+        run: node scripts/fetch-fixtures.js
