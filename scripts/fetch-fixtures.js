@@ -1,5 +1,5 @@
 // fetch-fixtures.js
-// Run every Monday at 7am (Windows Task Scheduler -> fetch-fixtures.bat).
+// Run weekly by GitHub Actions (see .github/workflows/fetch-fixtures.yml).
 // Picks 5 random upcoming matches from football-data.org and saves them to Supabase
 // as the new round. No Anthropic key needed. Requires Node 18+.
 //

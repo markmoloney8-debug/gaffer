@@ -44,11 +44,11 @@ async function sb(method, path, body, prefer) {
   return text ? JSON.parse(text) : null;
 }
 
-// Next Monday 07:00 (UTC), the time the next round is generated.
-function nextMonday7(now) {
+// Next Tuesday 07:00 (UTC), the time the next round is generated.
+function nextRoundTime(now) {
   const d = new Date(now);
   d.setUTCHours(7, 0, 0, 0);
-  while (d.getUTCDay() !== 1 || d.getTime() <= now) d.setUTCDate(d.getUTCDate() + 1);
+  while (d.getUTCDay() !== 2 || d.getTime() <= now) d.setUTCDate(d.getUTCDate() + 1);
   return d.getTime();
 }
 
@@ -73,7 +73,7 @@ async function main() {
   }
 
   const now = Date.now();
-  const cutoff = nextMonday7(now) - 3 * HOUR;
+  const cutoff = nextRoundTime(now) - 3 * HOUR;
   const data = await fdGet(`/competitions/${code}/matches?dateFrom=${isoDate(now)}&dateTo=${isoDate(cutoff + DAY)}`);
   const used = new Set(fixtures.map(f => f.matchId));
   const candidates = (data.matches || []).filter(m => {
