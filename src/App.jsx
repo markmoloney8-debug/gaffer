@@ -141,6 +141,7 @@ const db = {
       fixtures:     r.fixtures,
       mockResults:  r.mock_results || null,
       results:      r.results || null,
+      series:       r.series || 1,
       week:         r.week,
       locked:       r.locked,
       winnersFound: r.winners_found,
@@ -154,6 +155,7 @@ const db = {
       fixtures:      round.fixtures,
       mock_results:  round.mockResults || null,
       results:       round.results || null,
+      series:        round.series || 1,
       week:          round.week,
       locked:        round.locked,
       winners_found: round.winnersFound,
@@ -180,6 +182,9 @@ const db = {
   },
   async updateSubPreds(id, preds) {
     return sb.patch("submissions", `id=eq.${id}`, { preds });
+  },
+  async getHistory() {
+    return sb.get("history", "order=week.asc");
   },
   async clearSubs() {
     return sb.del("submissions", "submitted_at=gte.1970-01-01");
@@ -410,6 +415,8 @@ export default function App() {
   const [results,   setResults]   = useState(null);
   const [countdown, setCountdown] = useState(null);
   const [appReady,  setAppReady]  = useState(false); // initial load complete
+  const [history,   setHistory]   = useState([]);
+  const [storySeries, setStorySeries] = useState(null);
 
   const [isAdmin,   setIsAdmin]   = useState(false);
   const [showPin,   setShowPin]   = useState(false);
@@ -432,6 +439,13 @@ export default function App() {
     }
     init();
   }, []);
+
+  async function openStory() {
+    setError("");
+    try { setHistory(await db.getHistory()); } catch { setHistory([]); }
+    setStorySeries(null);
+    setView("story");
+  }
 
   // ── Poll for live updates (round + subs every 5s) ─────────────────────────
   useEffect(() => {
@@ -624,6 +638,7 @@ export default function App() {
               ✏️ My Predictions
             </Btn>
             <Btn onClick={()=>setView("lobby")} disabled={!round}>👥 Lobby</Btn>
+            <Btn onClick={openStory}>📊 The Story So Far</Btn>
           </div>
           {round?(
             <div style={S.pill}>
@@ -931,6 +946,12 @@ export default function App() {
         </Screen>
       )}
 
+      {/* ── STORY SO FAR ── */}
+      {view==="story"&&(
+        <StoryView history={history} round={round} subs={subs}
+          series={storySeries} setSeries={setStorySeries} onBack={()=>setView("home")}/>
+      )}
+
       {/* ── REVEAL ── */}
       {view==="reveal"&&round&&results&&(
         <RevealView round={round} results={results} subs={subs}
@@ -941,6 +962,105 @@ export default function App() {
 
       {loading&&<div style={S.overlay}><Loader msg={loadMsg}/></div>}
     </div>
+  );
+}
+
+// ─── The Story So Far ─────────────────────────────────────────────────────────
+// The game runs round after round until somebody gets all 5 right. This shows how many
+// entries each player has used in the current run, and the scores of every entry.
+function StoryView({ history, round, subs, series, setSeries, onBack }) {
+  const current = round ? (round.series||1) : 1;
+  const allSeries = [...new Set([current, ...history.map(h=>h.series)])].sort((a,b)=>b-a);
+  const sel = series ?? current;
+
+  // Past rounds from the history table
+  const rows = history.filter(h=>h.series===sel).map(h=>({
+    week:h.week, username:h.username, entryName:h.entry_name,
+    correct:h.correct, total:h.total, perfect:!!h.perfect, pending:false,
+  }));
+
+  // The round in play. Scores only appear once a winner has been revealed.
+  let weeks = [...new Set(rows.map(r=>r.week))];
+  if (sel===current && round) {
+    const res = round.mockResults || round.results;
+    const showScores = round.winnersFound && Array.isArray(res);
+    subs.forEach(s=>{
+      const sc = showScores ? scoreEntry(s,res) : null;
+      rows.push({ week:round.week, username:s.username, entryName:s.entryName,
+        correct:sc?sc.correct:0, total:sc?sc.total:0, perfect:showScores&&isPerfect(s,res), pending:!showScores });
+    });
+    if (!weeks.includes(round.week)) weeks.push(round.week);
+  }
+  weeks = weeks.sort((a,b)=>a-b);
+
+  const players = [...new Set(rows.map(r=>r.username))].map(u=>{
+    const mine = rows.filter(r=>r.username===u);
+    const scored = mine.filter(r=>!r.pending);
+    const right = scored.reduce((n,r)=>n+r.correct,0);
+    const made  = scored.reduce((n,r)=>n+(r.total||0),0);
+    return { username:u, entries:mine.length, right, made,
+      acc: made ? Math.round((right/made)*100) : null,
+      best: scored.length ? Math.max(...scored.map(r=>r.correct)) : null,
+      won: mine.some(r=>r.perfect) };
+  }).sort((a,b)=>(b.won-a.won)||((b.best??-1)-(a.best??-1))||(b.entries-a.entries));
+  const winners = players.filter(p=>p.won);
+
+  const cell = {padding:"8px 6px",fontSize:13,borderBottom:"1px solid var(--border)"};
+  return (
+    <Screen wide>
+      <BackBtn onClick={onBack}/>
+      <SectionTitle eyebrow="The Gaffer" title="The Story So Far"
+        sub="Entries keep adding up until somebody gets all 5 right."/>
+
+      {allSeries.length>1&&(
+        <select value={sel} onChange={e=>setSeries(Number(e.target.value))} style={{...S.input,maxWidth:260}}>
+          {allSeries.map(n=><option key={n} value={n}>{n===current?`Current run (#${n})`:`Run #${n}`}</option>)}
+        </select>
+      )}
+
+      {winners.length>0&&(
+        <div style={{width:"100%",background:"rgba(240,192,64,0.08)",border:"1px solid rgba(240,192,64,0.3)",borderRadius:12,padding:"12px 16px",fontSize:14}}>
+          🏆 {winners.map(w=>`${w.username} (${w.entries} entr${w.entries!==1?"ies":"y"})`).join(", ")} got all 5 right.
+        </div>
+      )}
+
+      {players.length===0
+        ? <div style={{color:"var(--muted)",fontSize:13,textAlign:"center",padding:"16px 0"}}>Nothing here yet.</div>
+        : <>
+          <div style={{width:"100%"}}>
+            <div style={S.sectionLabel}>Entries used</div>
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <thead><tr style={{textAlign:"left",color:"var(--muted)",fontSize:11,textTransform:"uppercase",letterSpacing:"0.06em"}}>
+                <th style={cell}>Player</th><th style={cell}>Entries</th><th style={cell}>Best</th><th style={cell}>Accuracy</th>
+              </tr></thead>
+              <tbody>{players.map(p=>(
+                <tr key={p.username}>
+                  <td style={cell}>{p.won?"🏆 ":""}{p.username}</td>
+                  <td style={cell}>{p.entries}</td>
+                  <td style={cell}>{p.best===null?"-":`${p.best}/5`}</td>
+                  <td style={cell}>{p.acc===null?"-":<>{p.acc}% <span style={{color:"var(--muted)",fontSize:11}}>({p.right}/{p.made})</span></>}</td>
+                </tr>))}</tbody>
+            </table>
+          </div>
+
+          {weeks.map(w=>(
+            <div key={w} style={{width:"100%"}}>
+              <div style={S.sectionLabel}>Week {w}{sel===current&&round&&w===round.week&&!round.winnersFound?" (in play)":""}</div>
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <tbody>{rows.filter(r=>r.week===w)
+                  .sort((a,b)=>(b.correct-a.correct)||a.username.localeCompare(b.username))
+                  .map((r,i)=>(
+                  <tr key={i}>
+                    <td style={cell}>{r.username} <span style={{color:"var(--muted)"}}>({r.entryName})</span></td>
+                    <td style={{...cell,textAlign:"right",color:r.perfect?"var(--gold)":"var(--text)",fontWeight:r.perfect?700:400}}>
+                      {r.pending?"🔒":`${r.correct}/${r.total||5}`}
+                    </td>
+                  </tr>))}</tbody>
+              </table>
+            </div>
+          ))}
+        </>}
+    </Screen>
   );
 }
 
