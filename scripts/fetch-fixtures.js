@@ -119,6 +119,30 @@ async function main() {
   const rounds = await sb("GET", "round?id=eq.1");
   const week   = rounds.length ? (rounds[0].week || 1) + 1 : 1;
 
+  // Archive last round's entries (with scores) so "The Story So Far" can keep a running total.
+  let series = (rounds.length && rounds[0].series) || 1;
+  if (rounds.length && !rounds[0].mock_results) {
+    const prev = rounds[0];
+    const subs = await sb("GET", "submissions?select=username,entry_name,preds");
+    if (subs.length) {
+      const results = Array.isArray(prev.results) ? prev.results : [];
+      const hit = (s, r, i) => r.result === "void" || (s.preds || {})[i] === r.result || (s.preds || {})[String(i)] === r.result;
+      const allFinal = results.length === (prev.fixtures || []).length && results.every(r => r.result !== "upcoming");
+      if (!allFinal) console.log("WARNING: last round's results were not all final. Archiving entries with the results that were available.");
+      const rows = subs.map(s => {
+        let correct = 0, total = 0;
+        results.forEach((r, i) => { if (r.result === "upcoming") return; total++; if (hit(s, r, i)) correct++; });
+        return {
+          series, week: prev.week || 1, username: s.username, entry_name: s.entry_name,
+          preds: s.preds, correct, total, perfect: allFinal && results.every((r, i) => hit(s, r, i)),
+        };
+      });
+      console.log(`Archiving ${rows.length} entr${rows.length === 1 ? "y" : "ies"} from Week ${prev.week || 1}...`);
+      await sb("POST", "history", rows, "return=minimal");
+      if (rows.some(r => r.perfect)) { series += 1; console.log("We had a winner last round: starting a new run."); }
+    }
+  }
+
   console.log("Clearing old submissions...");
   await sb("DELETE", "submissions?submitted_at=gte.1970-01-01", null, "return=minimal");
 
@@ -130,6 +154,7 @@ async function main() {
     mock_results:  null,
     results:       null,
     week,
+    series,
     locked:        false,
     winners_found: false,
   }, "resolution=merge-duplicates,return=minimal");
