@@ -3,7 +3,7 @@ name: Fetch weekly fixtures
 # WARNING: this replaces the current round and clears all entries.
 on:
   schedule:
-    - cron: "0 7 * * 1"       # Mondays 07:00 UTC (08:00 in UK summer time)
+    - cron: "0 7 * * 2"       # Tuesdays 07:00 UTC (08:00 in UK summer time)
   workflow_dispatch:
     inputs:
       confirm:
@@ -26,6 +26,8 @@ jobs:
       - name: Pick this week's fixtures
         env:
           FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
+          # A manual run (confirmed with WIPE) replaces the round even if it is still running.
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
           SB_URL: https://oszrnwhyvmvccxxepsnm.supabase.co
           SB_KEY: sb_publishable_V9itVh6Qu_ThqCfAEV5SBA_PagJsoG4
         run: node scripts/fetch-fixtures.js

@@ -1,0 +1,46 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - run: npm run test:unit
+
+  database:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: test }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGPASSWORD: test
+      PSQL: psql -h localhost -U postgres -v ON_ERROR_STOP=1 -q
+    steps:
+      - uses: actions/checkout@v4
+      - run: $PSQL -c "create database gaffer_test"
+      - run: |
+          for f in tests/sql/baseline.sql history-setup.sql hardening.sql; do $PSQL -d gaffer_test -f $f; done
+      - run: $PSQL -d gaffer_test -f tests/sql/hardening.test.sql
+      - name: Setup scripts are safe to run twice
+        run: for f in history-setup.sql hardening.sql; do $PSQL -d gaffer_test -f $f; done
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
