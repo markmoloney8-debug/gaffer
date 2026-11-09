@@ -1,14 +1,26 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, createContext, useContext } from "react";
+import { deadlineTs, isDeadlinePassed, msUntilDeadline, fmtCountdown, hit, isPerfect, scoreEntry } from "./logic.js";
 
 // ─── CSS ──────────────────────────────────────────────────────────────────────
 const css = `
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #05080f; }
+  body { background: var(--bg); }
   :root {
     --gold: #f0c040; --ink: #05080f; --surface: #0c1018; --surface2: #131822;
     --border: rgba(255,255,255,0.07); --muted: #4a5568; --text: #e2e8f0;
     --green: #34d399; --red: #f87171;
+    --bg: #05080f; --navbg: rgba(5,8,15,0.92); --scrim: rgba(5,8,15,0.88);
+    --g1: #f0c040; --g2: #f5d780; --g3: #c8960c; --danger-text: #fca5a5;
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f3ee; --ink: #ffffff; --surface: #efece4; --surface2: #ffffff;
+    --border: rgba(15,23,42,0.13); --muted: #5b6574; --text: #1a202c;
+    --gold: #a87400; --green: #047857; --red: #b91c1c;
+    --navbg: rgba(245,243,238,0.92); --scrim: rgba(245,243,238,0.9);
+    --g1: #a87400; --g2: #c58f10; --g3: #7a5400; --danger-text: #b91c1c;
+    color-scheme: light;
   }
   @keyframes spin         { to { transform: rotate(360deg); } }
   @keyframes fadeUp       { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
@@ -32,7 +44,6 @@ document.head.appendChild(styleEl);
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const ADMIN_PIN         = "085419";                        // ← change this
-const INVITE_CODE       = "GAFFERPYW2026";                  // ← share with your group
 const MAX_ENTRIES       = 5;
 const SB_URL            = "https://oszrnwhyvmvccxxepsnm.supabase.co";
 const SB_KEY            = "sb_publishable_V9itVh6Qu_ThqCfAEV5SBA_PagJsoG4";
@@ -43,6 +54,23 @@ const OUTCOMES = [
   { key:"draw", label:"Draw",     icon:"🤝" },
   { key:"away", label:"Away Win", icon:"✈️" },
 ];
+
+// ─── Avatars, group badges ────────────────────────────────────────────────────
+const AVATAR_EMOJIS = ["⚽","🧢","🦁","🐯","🦊","🐻","🐼","🐸","🐵","🦉","🦄","🐙","👑","🔥","⭐","🍀","🎯","🚀","🍺","☕","🎩","🕶️","🧠","💪"];
+const AVATAR_COLORS = ["#f0c040","#34d399","#60a5fa","#a78bfa","#f472b6","#fb923c","#f87171","#94a3b8"];
+const GROUP_EMOJIS  = ["","⚽","🏆","🔥","🍺","🦁","🐯","🚀","🎯","👑","🍀","⭐","🧠","🎩"];
+const gLabel = g => g ? `${g.emoji ? g.emoji + " " : ""}${g.name}` : "";
+const ProfilesCtx = createContext({});
+
+function AvatarBubble({ emoji, color, initial, size = 28 }) {
+  const base = { width:size, height:size, borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 };
+  if (emoji) return <div style={{ ...base, background: color || "var(--gold)", fontSize: Math.round(size*0.55), lineHeight:1 }}>{emoji}</div>;
+  return <div style={{ ...S.playerAvatar, width:size, height:size, fontSize: Math.round(size*0.43) }}>{initial}</div>;
+}
+function Avatar({ name, size = 28 }) {
+  const p = useContext(ProfilesCtx)[name] || {};
+  return <AvatarBubble emoji={p.avatar} color={p.avatar_color} initial={(name||"?")[0].toUpperCase()} size={size}/>;
+}
 
 // ─── Password hashing ─────────────────────────────────────────────────────────
 async function hashPassword(pw) {
@@ -127,24 +155,55 @@ const db = {
     const rows = await sb.get("users", `username=eq.${encodeURIComponent(username)}`);
     return rows[0] || null;
   },
-  async createUser(username, passwordHash) {
-    return sb.insert("users", { username, password_hash: passwordHash });
+  async createUser(username, passwordHash, groupId) {
+    return sb.insert("users", { username, password_hash: passwordHash, group_id: groupId });
+  },
+
+  // Groups: each group has its own invite code, entries, history and winners
+  async getGroupByCode(code) {
+    const rows = await sb.get("groups", `invite_code=eq.${encodeURIComponent(code)}`);
+    return rows[0] || null;
+  },
+  async getMemberships(username) {
+    return sb.get("memberships", `username=eq.${encodeURIComponent(username)}`);
+  },
+  async addMembership(username, groupId) {
+    return sb.insert("memberships", { username, group_id: groupId });
+  },
+  async getGroupsByIds(ids) {
+    if (!ids.length) return [];
+    return sb.get("groups", `id=in.(${ids.join(",")})&order=created_at.asc`);
+  },
+  async getGroup(id) {
+    const rows = await sb.get("groups", `id=eq.${id}`);
+    return rows[0] || null;
+  },
+  async createGroup(name, code, emoji) {
+    const rows = await sb.insert("groups", { name, invite_code: code, emoji: emoji || null });
+    await sb.insert("group_state", { group_id: rows[0].id });
+    return rows[0];
+  },
+  async setGroupWinners(groupId, found) {
+    return sb.patch("group_state", `group_id=eq.${groupId}`, { winners_found: found });
   },
 
   // Round (single row, id=1)
-  async getRound() {
+  async getRound(groupId) {
     const rows = await sb.get("round", "id=eq.1");
     if (!rows.length) return null;
     const r = rows[0];
+    // The round (fixtures, results) is shared. Winner/run status is per group.
+    let gs = null;
+    if (groupId) { try { gs = (await sb.get("group_state", `group_id=eq.${groupId}`))[0] || null; } catch {} }
     return {
       league:       r.league,
       fixtures:     r.fixtures,
       mockResults:  r.mock_results || null,
       results:      r.results || null,
-      series:       r.series || 1,
+      series:       (gs && gs.series) || 1,
       week:         r.week,
       locked:       r.locked,
-      winnersFound: r.winners_found,
+      winnersFound: gs ? !!gs.winners_found : false,
       createdAt:    new Date(r.created_at).getTime(),
     };
   },
@@ -167,8 +226,9 @@ const db = {
   },
 
   // Submissions
-  async getSubs() {
-    const rows = await sb.get("submissions", "order=submitted_at.asc");
+  async getSubs(groupId) {
+    if (!groupId) return [];
+    const rows = await sb.get("submissions", `group_id=eq.${groupId}&order=submitted_at.asc`);
     return rows.map(r => ({
       id:          r.id,
       username:    r.username,
@@ -177,14 +237,15 @@ const db = {
       submittedAt: new Date(r.submitted_at).getTime(),
     }));
   },
-  async addSub(username, entryName, preds) {
-    return sb.insert("submissions", { username, entry_name: entryName, preds });
+  async addSub(username, entryName, preds, groupId) {
+    return sb.insert("submissions", { username, entry_name: entryName, preds, group_id: groupId });
   },
   async updateSubPreds(id, preds) {
     return sb.patch("submissions", `id=eq.${id}`, { preds });
   },
-  async getHistory() {
-    return sb.get("history", "order=week.asc");
+  async getHistory(groupId) {
+    if (!groupId) return [];
+    return sb.get("history", `group_id=eq.${groupId}&order=week.asc`);
   },
   async clearSubs() {
     return sb.del("submissions", "submitted_at=gte.1970-01-01");
@@ -201,91 +262,6 @@ const session = {
   set: u   => localStorage.setItem("fp_session", u),
   clear: () => localStorage.removeItem("fp_session"),
 };
-
-// ─── Kickoff deadline helpers ─────────────────────────────────────────────────
-function deadlineTs(fixtures) {
-  const tss = (fixtures||[]).map(f=>f.kickoffTs).filter(Boolean);
-  if (!tss.length) return null;
-  return Math.min(...tss) - 60_000;
-}
-function isDeadlinePassed(fixtures) {
-  const d = deadlineTs(fixtures);
-  return d !== null && Date.now() >= d;
-}
-function msUntilDeadline(fixtures) {
-  const d = deadlineTs(fixtures);
-  if (d === null) return null;
-  return Math.max(0, d - Date.now());
-}
-function fmtCountdown(ms) {
-  if (ms <= 0) return "00:00:00";
-  const s = Math.floor(ms/1000);
-  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
-  return [h,m,sec].map(n=>String(n).padStart(2,"0")).join(":");
-}
-
-// ─── Mock data seeder ─────────────────────────────────────────────────────────
-async function seedMockData() {
-  const base = Date.now() + 10 * 60_000;
-  const fixtures = [
-    { home:"Arsenal",     away:"Chelsea",    date:"Sat 26 Apr", time:"12:30", kickoffTs: base },
-    { home:"Man City",    away:"Liverpool",  date:"Sat 26 Apr", time:"15:00", kickoffTs: base + 2.5*3600_000 },
-    { home:"Tottenham",   away:"Man Utd",    date:"Sat 26 Apr", time:"15:00", kickoffTs: base + 2.5*3600_000 },
-    { home:"Aston Villa", away:"Newcastle",  date:"Sun 27 Apr", time:"14:00", kickoffTs: base + 26*3600_000 },
-    { home:"Brighton",    away:"Wolves",     date:"Sun 27 Apr", time:"16:30", kickoffTs: base + 28.5*3600_000 },
-  ];
-  const mockResults = [
-    { result:"home", score:"2-0" },
-    { result:"home", score:"3-1" },
-    { result:"away", score:"1-2" },
-    { result:"draw", score:"1-1" },
-    { result:"home", score:"2-1" },
-  ];
-  const round = { league:{ id:"epl", name:"Premier League", flag:"🏴󠁧󠁢󠁥󠁮󠁧󠁿" }, fixtures, mockResults, week:1, locked:false, winnersFound:false };
-
-  // Mock users
-  const pwHash = await hashPassword("test1234");
-  for (const u of ["MarkTest","SarahTest","JoshTest","PeteTest"]) {
-    try { await db.createUser(u, pwHash); } catch {} // ignore if already exists
-  }
-
-  // Clear existing round/subs and write fresh
-  await db.clearAll();
-  await db.setRound(round);
-
-  const mockSubs = [
-    { username:"MarkTest",  entryName:"Banker",    preds:{"0":"home","1":"home","2":"away","3":"draw","4":"home"} },
-    { username:"MarkTest",  entryName:"Wild Card", preds:{"0":"draw","1":"away","2":"home","3":"home","4":"away"} },
-    { username:"SarahTest", entryName:"Main Pick", preds:{"0":"home","1":"home","2":"away","3":"draw","4":"home"} },
-    { username:"JoshTest",  entryName:"Gut Feel",  preds:{"0":"away","1":"draw","2":"away","3":"draw","4":"away"} },
-    { username:"PeteTest",  entryName:"No Idea",   preds:{"0":"draw","1":"away","2":"home","3":"away","4":"draw"} },
-  ];
-  for (const s of mockSubs) await db.addSub(s.username, s.entryName, s.preds);
-
-  console.log("✅ Mock data seeded in Supabase.");
-  return "Done — refresh the page.";
-}
-window.seedMockData = seedMockData;
-
-// ─── Scoring helpers ──────────────────────────────────────────────────────────
-// A void fixture counts as correct for everyone.
-function hit(entry, r, i) {
-  return r.result==="void" || entry.preds[String(i)]===r.result || entry.preds[i]===r.result;
-}
-function isPerfect(entry, results) {
-  if (!results||results.some(r=>r.result==="upcoming")) return false;
-  return results.every((r,i)=>hit(entry,r,i));
-}
-function scoreEntry(entry, results) {
-  if (!results) return { correct:0, total:0 };
-  let correct=0, total=0;
-  results.forEach((r,i)=>{
-    if (r.result==="upcoming") return;
-    total++;
-    if (hit(entry,r,i)) correct++;
-  });
-  return { correct, total };
-}
 
 // ─── Confetti ─────────────────────────────────────────────────────────────────
 function Confetti({ active }) {
@@ -335,7 +311,7 @@ function PinModal({ onSuccess, onCancel }) {
 }
 
 // ─── Auth Screen ──────────────────────────────────────────────────────────────
-function AuthScreen({ onLogin }) {
+function AuthScreen({ onLogin, theme, toggleTheme }) {
   const [tab,setTab]=useState("login");
   const [u,setU]=useState(""); const [pw,setPw]=useState("");
   const [cpw,setCpw]=useState(""); const [inv,setInv]=useState("");
@@ -359,11 +335,13 @@ function AuthScreen({ onLogin }) {
     if (trimmed.length>20)                       { setErr("Username must be 20 characters or less."); setLoading(false); return; }
     if (pw.length<4)                             { setErr("Password must be at least 4 characters."); setLoading(false); return; }
     if (pw!==cpw)                                { setErr("Passwords don't match."); setLoading(false); return; }
-    if (inv.trim().toUpperCase()!==INVITE_CODE)  { setErr("Invalid invite code."); setLoading(false); return; }
     try {
+      const group = await db.getGroupByCode(inv.trim().toUpperCase());
+      if (!group) { setErr("Invalid invite code."); setLoading(false); return; }
       const existing = await db.getUser(trimmed);
       if (existing) { setErr("Username already taken."); setLoading(false); return; }
-      await db.createUser(trimmed, await hashPassword(pw));
+      await db.createUser(trimmed, await hashPassword(pw), group.id);
+      await db.addMembership(trimmed, group.id);
       session.set(trimmed); onLogin(trimmed);
     } catch { setErr("Connection error — check your internet."); }
     setLoading(false);
@@ -373,6 +351,9 @@ function AuthScreen({ onLogin }) {
 
   return (
     <Screen>
+      <button onClick={toggleTheme} aria-label="Switch between light and dark mode" style={{...S.navBtn,position:"fixed",top:12,right:16}}>
+        {theme==="dark"?"☀️":"🌙"}
+      </button>
       <div style={S.bigLogo}>
         <div style={{fontSize:56,marginBottom:8}}>⚽</div>
         <div style={S.bigTitle}>THE GAFFER</div>
@@ -416,6 +397,25 @@ export default function App() {
   const [countdown, setCountdown] = useState(null);
   const [appReady,  setAppReady]  = useState(false); // initial load complete
   const [history,   setHistory]   = useState([]);
+  const [groupId,   setGroupId]   = useState(null);
+  const [myGroups,  setMyGroups]  = useState([]);
+  const [joinCode,  setJoinCode]  = useState("");
+  const [joinErr,   setJoinErr]   = useState("");
+  const [theme,     setTheme]     = useState(() => {
+    try { const t = localStorage.getItem("fp_theme"); if (t === "light" || t === "dark") return t; } catch {}
+    return (typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
+  });
+  const [profiles,  setProfiles]  = useState({});
+  const [profAvatar, setProfAvatar] = useState("");
+  const [profColor,  setProfColor]  = useState(AVATAR_COLORS[0]);
+  const [newGroupEmoji, setNewGroupEmoji] = useState("");
+  const [fbCategory, setFbCategory] = useState("idea");
+  const [fbText,     setFbText]     = useState("");
+  const [fbNote,     setFbNote]     = useState("");
+  const [feedbackList, setFeedbackList] = useState([]);
+  const [groups,    setGroups]    = useState([]);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupCode, setNewGroupCode] = useState("");
   const [storySeries, setStorySeries] = useState(null);
 
   const [isAdmin,   setIsAdmin]   = useState(false);
@@ -426,11 +426,85 @@ export default function App() {
   const [entryView, setEntryView] = useState("list");
   const [submitDone,setSubmitDone]= useState(false);
 
-  // ── Initial load from Supabase ────────────────────────────────────────────
+  // ── Theme ─────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    try { localStorage.setItem("fp_theme", theme); } catch {}
+  }, [theme]);
+  const toggleTheme = () => setTheme(t => t === "dark" ? "light" : "dark");
+
+  // ── Player avatars ────────────────────────────────────────────────────────
+  async function loadProfiles() {
+    try {
+      const rows = await sb.get("users", "select=username,avatar,avatar_color");
+      setProfiles(Object.fromEntries(rows.map(r => [r.username, r])));
+    } catch {}
+  }
+  useEffect(() => { if (username && appReady) loadProfiles(); }, [username, appReady, view, groupId]);
+
+  function openProfile() {
+    const me = profiles[username] || {};
+    setProfAvatar(me.avatar || "");
+    setProfColor(me.avatar_color || AVATAR_COLORS[0]);
+    setError(""); setView("profile");
+  }
+  async function saveProfile() {
+    setLoading(true); setLoadMsg("Saving…"); setError("");
+    try {
+      await sb.patch("users", `username=eq.${encodeURIComponent(username)}`, { avatar: profAvatar || null, avatar_color: profColor });
+      await loadProfiles();
+      setView("home");
+    } catch { setError("Couldn't save your profile. Try again."); }
+    setLoading(false);
+  }
+
+  // ── Feedback ──────────────────────────────────────────────────────────────
+  async function sendFeedback() {
+    const message = fbText.trim();
+    if (!message) return;
+    setLoading(true); setLoadMsg("Sending…"); setFbNote(""); setError("");
+    try {
+      await sb.insert("feedback", { username, group_id: groupId, category: fbCategory, message });
+      setFbText(""); setFbNote("Thanks! Your feedback has been sent.");
+    } catch (e) {
+      setError(String(e.message||e).includes("wait") ? "Please wait a couple of minutes before sending another message." : "Couldn't send your feedback. Try again.");
+    }
+    setLoading(false);
+  }
+  async function loadFeedback() {
+    try { setFeedbackList(await sb.get("feedback", "order=created_at.desc&limit=30")); } catch { setFeedbackList([]); }
+  }
+  async function setFeedbackStatus(id, status) {
+    try {
+      await sb.patch("feedback", `id=eq.${id}`, { status });
+      await loadFeedback();
+    } catch { setError("Couldn't update that item."); }
+  }
+  async function setGroupEmoji(id, emoji) {
+    try {
+      await sb.patch("groups", `id=eq.${id}`, { emoji: emoji || null });
+      setMyGroups(gs => gs.map(g => g.id === id ? { ...g, emoji: emoji || null } : g));
+      await loadGroups();
+    } catch { setError("Couldn't change the badge."); }
+  }
+
+  // ── Initial load from Supabase (runs again whenever someone signs in/out) ──
   useEffect(() => {
     async function init() {
+      setAppReady(false);
+      if (!username) { setGroupId(null); setMyGroups([]); setAppReady(true); return; }
       try {
-        const [r, s] = await Promise.all([db.getRound(), db.getSubs()]);
+        const u = await db.getUser(username);
+        if (!u) { session.clear(); setUsername(null); setAppReady(true); return; }
+        let ids = (await db.getMemberships(username)).map(m => m.group_id);
+        if (!ids.length && u.group_id) ids = [u.group_id];
+        const gs = await db.getGroupsByIds(ids);
+        setMyGroups(gs);
+        let stored = null;
+        try { stored = localStorage.getItem("fp_group"); } catch {}
+        const gid = (gs.find(g => g.id === stored) || gs[0] || {}).id || null;
+        setGroupId(gid);
+        const [r, s] = await Promise.all([db.getRound(gid), db.getSubs(gid)]);
         setRound(r); setSubs(s);
       } catch (e) {
         setError("Couldn't connect to database. Check your internet connection.");
@@ -438,28 +512,74 @@ export default function App() {
       setAppReady(true);
     }
     init();
-  }, []);
+  }, [username]);
+
+  // ── Switch / join groups ──────────────────────────────────────────────────
+  async function switchGroup(id) {
+    if (!id || id === groupId) return;
+    try { localStorage.setItem("fp_group", id); } catch {}
+    setLoading(true); setLoadMsg("Switching group…"); setError("");
+    setSubs([]); setHistory([]); setResults(null);
+    try {
+      setGroupId(id);
+      const [r, s] = await Promise.all([db.getRound(id), db.getSubs(id)]);
+      setRound(r); setSubs(s);
+    } catch { setError("Couldn't switch group — try again."); }
+    setView("home"); setLoading(false);
+  }
+  async function joinGroup() {
+    const code = joinCode.trim().toUpperCase();
+    if (!code) return;
+    setJoinErr(""); setLoading(true); setLoadMsg("Joining…");
+    try {
+      const g = await db.getGroupByCode(code);
+      if (!g) { setJoinErr("Invalid invite code."); setLoading(false); return; }
+      if (!myGroups.some(x => x.id === g.id)) {
+        await db.addMembership(username, g.id);
+        setMyGroups(gs => [...gs, g]);
+      }
+      setJoinCode("");
+      if (g.id === groupId) { setView("home"); setLoading(false); return; }
+      await switchGroup(g.id);
+    } catch { setJoinErr("Couldn't join. Try again."); setLoading(false); }
+  }
+
+  async function loadGroups() {
+    try {
+      const [gs, us] = await Promise.all([sb.get("groups","order=created_at.asc"), sb.get("memberships","select=group_id")]);
+      setGroups(gs.map(g=>({...g, members: us.filter(u=>u.group_id===g.id).length})));
+    } catch { setGroups([]); }
+  }
+  async function addGroup() {
+    const name=newGroupName.trim(), code=newGroupCode.trim().toUpperCase();
+    if (name.length<2||code.length<4) { setError("Give the group a name and a code of at least 4 characters."); return; }
+    setLoading(true); setLoadMsg("Creating group…"); setError("");
+    try {
+      await db.createGroup(name, code, newGroupEmoji);
+      setNewGroupName(""); setNewGroupCode(""); setNewGroupEmoji("");
+      await loadGroups();
+    } catch { setError("Couldn't create the group. That code may already be in use."); }
+    setLoading(false);
+  }
 
   async function openStory() {
     setError("");
-    try { setHistory(await db.getHistory()); } catch { setHistory([]); }
+    try { setHistory(await db.getHistory(groupId)); } catch { setHistory([]); }
     setStorySeries(null);
     setView("story");
   }
 
-  // ── Poll for live updates (round + subs every 5s) ─────────────────────────
+  // ── Poll for live updates (round + this group's subs every 5s) ───────────
   useEffect(() => {
-    if (!appReady) return;
-    const cancelRound = sb.poll("round", "", async () => {
-      const r = await db.getRound();
-      setRound(r);
+    if (!appReady || !groupId) return;
+    const refreshRound = async () => { setRound(await db.getRound(groupId)); };
+    const cancelRound = sb.poll("round", "", refreshRound);
+    const cancelState = sb.poll("group_state", `group_id=eq.${groupId}`, refreshRound);
+    const cancelSubs = sb.poll("submissions", `group_id=eq.${groupId}&order=submitted_at.asc`, async () => {
+      setSubs(await db.getSubs(groupId));
     });
-    const cancelSubs = sb.poll("submissions", "order=submitted_at.asc", async () => {
-      const s = await db.getSubs();
-      setSubs(s);
-    });
-    return () => { cancelRound(); cancelSubs(); };
-  }, [appReady]);
+    return () => { cancelRound(); cancelState(); cancelSubs(); };
+  }, [appReady, groupId]);
 
   // ── Deadline ticker ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -479,6 +599,7 @@ export default function App() {
     return () => clearInterval(id);
   }, [round]);
 
+  const groupName      = gLabel(myGroups.find(g=>g.id===groupId));
   const myEntries      = username ? subs.filter(s=>s.username===username) : [];
   const deadlineLocked = round ? isDeadlinePassed(round.fixtures) : false;
   const canAddEntry    = myEntries.length < MAX_ENTRIES && !deadlineLocked;
@@ -493,16 +614,16 @@ export default function App() {
   function executeAdmin(t) {
     if (t==="reset")   { doReset(); }
     if (t==="newweek") { doNewWeek(); }
-    if (t==="admin")   { setView("admin"); }
+    if (t==="admin")   { loadGroups(); loadFeedback(); setView("admin"); }
   }
 
   // ── Submit an entry ───────────────────────────────────────────────────────
   async function submitEntry() {
-    if (!entryName.trim()||!allPicked||!canAddEntry||round?.locked||deadlineLocked) return;
+    if (!allPicked||!canAddEntry||round?.locked||deadlineLocked) return;
     setLoading(true); setLoadMsg("Sealing entry…");
     try {
-      await db.addSub(username, entryName.trim(), preds);
-      const s = await db.getSubs();
+      await db.addSub(username, `Entry ${myEntries.length+1}`, preds, groupId);   // auto-named, no typing needed
+      const s = await db.getSubs(groupId);
       setSubs(s);
       setPreds({}); setEntryName(""); setEntryView("list"); setSubmitDone(true);
     } catch { setError("Couldn't save entry — try again."); }
@@ -513,7 +634,7 @@ export default function App() {
   async function startReveal() {
     setLoading(true); setLoadMsg("Checking results…"); setError("");
     try {
-      const fresh = (await db.getRound()) || round;
+      const fresh = (await db.getRound(groupId)) || round;
       let parsed;
       if (fresh.mockResults) {
         parsed = fresh.mockResults;               // test mode
@@ -529,7 +650,7 @@ export default function App() {
         }
       }
       await db.patchRound({ locked:true });
-      setRound(await db.getRound());
+      setRound(await db.getRound(groupId));
       setResults(parsed); setView("reveal");
     } catch {
       setError("Couldn't load results — try again later.");
@@ -542,12 +663,12 @@ export default function App() {
     if (on && !window.confirm(`Void fixture #${i+1}? Everyone will be counted as correct for it.`)) return;
     setLoading(true); setLoadMsg("Updating…"); setError("");
     try {
-      const fresh = (await db.getRound()) || round;
+      const fresh = (await db.getRound(groupId)) || round;
       const base = (Array.isArray(fresh.results) && fresh.results.length===fresh.fixtures.length
         ? fresh.results : fresh.fixtures.map(()=>({result:"upcoming",score:null}))).map(r=>({...r}));
       base[i] = on ? { result:"void", score:null, voided:true } : { result:"upcoming", score:null };
       await db.patchRound({ results: base });
-      setRound(await db.getRound());
+      setRound(await db.getRound(groupId));
     } catch(e) { setError("Couldn't update: "+e.message); }
     setLoading(false);
   }
@@ -557,7 +678,7 @@ export default function App() {
     setLoading(true); setLoadMsg("Saving pick…"); setError("");
     try {
       await db.updateSubPreds(sub.id, { ...sub.preds, [String(i)]: key });
-      setSubs(await db.getSubs());
+      setSubs(await db.getSubs(groupId));
     } catch { setError("Couldn't save your pick — try again."); }
     setLoading(false);
   }
@@ -565,8 +686,9 @@ export default function App() {
   // ── Reveal complete ───────────────────────────────────────────────────────
   async function onRevealComplete(winners) {
     if (winners.length>0) {
-      await db.patchRound({ locked:true, winners_found:true });
-      const r = await db.getRound();
+      await db.patchRound({ locked:true });
+      await db.setGroupWinners(groupId, true);
+      const r = await db.getRound(groupId);
       setRound(r);
       setConfetti(true);
     }
@@ -577,7 +699,7 @@ export default function App() {
   async function doNewWeek() {
     setLoading(true); setLoadMsg("Refreshing fixtures from database…");
     try {
-      const [r, s] = await Promise.all([db.getRound(), db.getSubs()]);
+      const [r, s] = await Promise.all([db.getRound(groupId), db.getSubs(groupId)]);
       setRound(r); setSubs(s); setResults(null); setView("lobby");
     } catch { setError("Couldn't refresh — check your connection."); }
     setLoading(false);
@@ -601,17 +723,18 @@ export default function App() {
   }
 
   // ── Not logged in ─────────────────────────────────────────────────────────
-  if (!username) return <AuthScreen onLogin={u=>setUsername(u)}/>;
+  if (!username) return <AuthScreen onLogin={u=>setUsername(u)} theme={theme} toggleTheme={toggleTheme}/>;
 
   // ── Loading initial data ───────────────────────────────────────────────────
   if (!appReady) return (
-    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#05080f"}}>
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--bg)"}}>
       <Loader msg="Connecting…"/>
     </div>
   );
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
+    <ProfilesCtx.Provider value={profiles}>
     <div style={S.root}>
       <Confetti active={confetti}/>
       {showPin&&<PinModal onSuccess={onPinSuccess} onCancel={()=>setShowPin(false)}/>}
@@ -619,8 +742,16 @@ export default function App() {
       {/* Nav */}
       <div style={S.nav}>
         <div style={S.navLogo} onClick={()=>setView("home")}>⚽ THE GAFFER</div>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <span style={{fontSize:13,color:"var(--muted)"}}>{username}</span>
+        <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+          <Avatar name={username} size={24}/>
+          <span style={{fontSize:13,color:"var(--muted)",maxWidth:110,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{username}{myGroups.length===1&&groupName?` · ${groupName}`:""}</span>
+          {myGroups.length>1&&(
+            <select value={groupId||""} onChange={e=>switchGroup(e.target.value)}
+              style={{...S.input,width:"auto",maxWidth:130,padding:"4px 8px",fontSize:12}}>
+              {myGroups.map(g=><option key={g.id} value={g.id}>{gLabel(g)}</option>)}
+            </select>
+          )}
+          <button style={S.navBtn} onClick={toggleTheme} aria-label="Switch between light and dark mode">{theme==="dark"?"☀️":"🌙"}</button>
           <button style={S.navBtn} onClick={signOut}>Sign out</button>
         </div>
       </div>
@@ -639,9 +770,13 @@ export default function App() {
             </Btn>
             <Btn onClick={()=>setView("lobby")} disabled={!round}>👥 Lobby</Btn>
             <Btn onClick={openStory}>📊 The Story So Far</Btn>
+            <Btn onClick={()=>{setJoinErr("");setJoinCode("");setView("join");}}>➕ Join another group</Btn>
+            <Btn onClick={openProfile}>🙂 My Profile</Btn>
+            <Btn onClick={()=>{setFbNote("");setError("");setView("feedback");}}>💬 Send feedback</Btn>
           </div>
           {round?(
             <div style={S.pill}>
+              {groupName&&<><span style={{fontWeight:600}}>{groupName}</span><span style={{color:"var(--muted)",margin:"0 8px"}}>·</span></>}
               <span style={{color:"var(--gold)",fontWeight:600}}>{round.league.flag} {round.league.name}</span>
               <span style={{color:"var(--muted)",margin:"0 8px"}}>·</span>
               <span style={{color:"var(--muted)"}}>Week {round.week}</span>
@@ -715,23 +850,60 @@ export default function App() {
             )}
           </div>
 
+          {/* Groups */}
+          <div style={{width:"100%",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:12,padding:"16px"}}>
+            <div style={S.sectionLabel}>Groups</div>
+            {groups.map(g=>(
+              <div key={g.id} style={{fontSize:13,display:"flex",gap:8,padding:"6px 0",borderBottom:"1px solid var(--border)"}}>
+                <select aria-label={`Badge for ${g.name}`} value={g.emoji||""} onChange={e=>setGroupEmoji(g.id,e.target.value)}
+                  style={{...S.input,width:56,padding:"2px 4px",fontSize:14}}>
+                  {GROUP_EMOJIS.map(em=><option key={em||"none"} value={em}>{em||"–"}</option>)}
+                </select>
+                <span style={{flex:1}}>{g.name}</span>
+                <code style={{color:"var(--gold)"}}>{g.invite_code}</code>
+                <span style={{color:"var(--muted)",width:64,textAlign:"right"}}>{g.members} player{g.members!==1?"s":""}</span>
+              </div>
+            ))}
+            {groups.length===0&&<div style={{fontSize:13,color:"var(--muted)"}}>No groups found.</div>}
+            <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:12}}>
+              <div style={{display:"flex",gap:8}}>
+                <select aria-label="New group badge" value={newGroupEmoji} onChange={e=>setNewGroupEmoji(e.target.value)} style={{...S.input,width:64}}>
+                  {GROUP_EMOJIS.map(em=><option key={em||"none"} value={em}>{em||"–"}</option>)}
+                </select>
+                <input style={S.input} placeholder="New group name" value={newGroupName} onChange={e=>setNewGroupName(e.target.value)} maxLength={30}/>
+              </div>
+              <input style={S.input} placeholder="Invite code (e.g. GAFFERMATES26)" value={newGroupCode} onChange={e=>setNewGroupCode(e.target.value.toUpperCase())} maxLength={24} autoCapitalize="characters"/>
+              <Btn onClick={addGroup} disabled={loading}>+ Add group</Btn>
+            </div>
+          </div>
+
+          {/* Feedback */}
+          <div style={{width:"100%",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:12,padding:"16px"}}>
+            <div style={S.sectionLabel}>Feedback ({feedbackList.filter(f=>f.status!=="done").length} open)</div>
+            {feedbackList.length===0&&<div style={{fontSize:13,color:"var(--muted)"}}>Nothing yet.</div>}
+            {feedbackList.map(f=>(
+              <div key={f.id} style={{padding:"10px 0",borderTop:"1px solid var(--border)",opacity:f.status==="done"?0.5:1}}>
+                <div style={{display:"flex",gap:8,fontSize:11,color:"var(--muted)",marginBottom:4}}>
+                  <span style={S.tag}>{({bug:"🐞 BUG",idea:"💡 IDEA",other:"💬 OTHER"})[f.category]||f.category}</span>
+                  <span>{f.username}</span>
+                  <span style={{marginLeft:"auto"}}>{f.created_at?new Date(f.created_at).toLocaleDateString("en-GB",{day:"numeric",month:"short"}):""}</span>
+                </div>
+                <div style={{fontSize:13,lineHeight:1.5,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{f.message}</div>
+                <button style={S.dangerLink} onClick={()=>setFeedbackStatus(f.id,f.status==="done"?"new":"done")}>
+                  {f.status==="done"?"Reopen":"Mark done"}
+                </button>
+              </div>
+            ))}
+          </div>
+
           {/* Actions */}
           <div style={{display:"flex",flexDirection:"column",gap:10,width:"100%"}}>
             {loading ? <Loader msg={loadMsg}/> : <>
               <Btn gold onClick={()=>doNewWeek()}>
                 🔄 Refresh from Database
               </Btn>
-              <button style={{...S.dangerLink,color:"var(--green)",marginTop:4}} onClick={async()=>{
-                setLoading(true); setLoadMsg("Seeding mock data…"); setError("");
-                try {
-                  await seedMockData();
-                  const [r,s]=await Promise.all([db.getRound(),db.getSubs()]);
-                  setRound(r); setSubs(s); setResults(null); setView("lobby");
-                } catch(e) { setError("Couldn't seed mock data: "+e.message); }
-                setLoading(false);
-              }}>🧪 Seed mock data (test mode)</button>
               <button style={S.dangerLink} onClick={()=>requireAdmin("reset")}>
-                ⚠️ Full reset (clears all data)
+                ⚠️ Full reset (clears the round and ALL groups' entries)
               </button>
             </>}
           </div>
@@ -772,7 +944,7 @@ export default function App() {
             <div style={{width:"100%",marginBottom:8}}>
               {myEntries.map((e,i)=>(
                 <div key={i} style={S.entryRow}>
-                  <div style={S.playerAvatar}>{e.entryName[0].toUpperCase()}</div>
+                  <Avatar name={e.username}/>
                   <div style={{flex:1}}>
                     <div style={{fontWeight:600,fontSize:14}}>{e.entryName}</div>
                     <div style={{fontSize:11,color:"var(--muted)"}}>
@@ -801,10 +973,7 @@ export default function App() {
       {view==="submit"&&round&&!round.locked&&!deadlineLocked&&entryView==="new"&&(
         <Screen wide>
           <BackBtn onClick={()=>setEntryView("list")}/>
-          <SectionTitle eyebrow={`Entry ${myEntries.length+1} of ${MAX_ENTRIES}`} title="New Entry" sub="Name your entry and pick a result for all 5 fixtures."/>
-          <Field label="Entry Name">
-            <input style={S.input} placeholder='e.g. "Banker" or "Wild Card"' value={entryName} onChange={e=>setEntryName(e.target.value)} maxLength={30}/>
-          </Field>
+          <SectionTitle eyebrow={`Entry ${myEntries.length+1} of ${MAX_ENTRIES}`} title="New Entry" sub="Pick a result for all 5 fixtures."/>
           <div style={{display:"flex",flexDirection:"column",gap:10,width:"100%"}}>
             {round.fixtures.map((f,i)=>(
               <div key={i} style={S.fixtureCard}>
@@ -837,7 +1006,7 @@ export default function App() {
             </div>
           </div>
           {loading?<Loader msg={loadMsg}/>:
-            <Btn gold onClick={submitEntry} disabled={!allPicked||!entryName.trim()}>🔒 Seal This Entry</Btn>}
+            <Btn gold onClick={submitEntry} disabled={!allPicked}>🔒 Seal This Entry</Btn>}
         </Screen>
       )}
 
@@ -858,7 +1027,7 @@ export default function App() {
             </div>
           )}
           {(round.locked||deadlineLocked)&&!round.winnersFound&&(
-            <div style={{width:"100%",background:"rgba(248,113,113,0.07)",border:"1px solid rgba(248,113,113,0.2)",borderRadius:10,padding:"10px 16px",textAlign:"center",fontSize:13,color:"#fca5a5",marginBottom:4}}>
+            <div style={{width:"100%",background:"rgba(248,113,113,0.07)",border:"1px solid rgba(248,113,113,0.2)",borderRadius:10,padding:"10px 16px",textAlign:"center",fontSize:13,color:"var(--danger-text)",marginBottom:4}}>
               🔒 Submissions closed
             </div>
           )}
@@ -919,7 +1088,7 @@ export default function App() {
                     const pe=subs.filter(s=>s.username===p);
                     return (
                       <div key={p} style={S.playerRow}>
-                        <div style={S.playerAvatar}>{p[0].toUpperCase()}</div>
+                        <Avatar name={p}/>
                         <div style={{flex:1}}>
                           <div style={{fontWeight:600,fontSize:14}}>{p}</div>
                           <div style={{fontSize:11,color:"var(--muted)"}}>{pe.length} entr{pe.length!==1?"ies":"y"}: {pe.map(e=>e.entryName).join(", ")}</div>
@@ -946,6 +1115,80 @@ export default function App() {
         </Screen>
       )}
 
+      {/* ── JOIN ANOTHER GROUP ── */}
+      {view==="join"&&(
+        <Screen>
+          <BackBtn onClick={()=>setView("home")}/>
+          <SectionTitle eyebrow="Groups" title="Join Another Group"
+            sub="Enter an invite code to join another group. Each group has its own entries and winners."/>
+          <Field label="Invite Code">
+            <input style={S.input} value={joinCode} onChange={e=>setJoinCode(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&joinGroup()} placeholder="e.g. GAFFERMATES26" autoCapitalize="characters" autoFocus/>
+          </Field>
+          {joinErr&&<ErrorBox>{joinErr}</ErrorBox>}
+          <Btn gold onClick={joinGroup} disabled={!joinCode.trim()}>Join Group →</Btn>
+          {myGroups.length>0&&(
+            <div style={{fontSize:12,color:"var(--muted)",textAlign:"center",lineHeight:1.7}}>
+              You're in: {myGroups.map(gLabel).join(", ")}
+            </div>
+          )}
+        </Screen>
+      )}
+
+      {/* ── PROFILE ── */}
+      {view==="profile"&&(
+        <Screen>
+          <BackBtn onClick={()=>setView("home")}/>
+          <SectionTitle eyebrow="You" title="My Profile" sub="Pick an avatar. Everyone in your groups will see it."/>
+          <AvatarBubble emoji={profAvatar} color={profColor} initial={(username||"?")[0].toUpperCase()} size={72}/>
+          <div style={{width:"100%"}}>
+            <div style={S.sectionLabel}>Avatar</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8}}>
+              <button aria-label="Use my initial" onClick={()=>setProfAvatar("")}
+                style={{...S.outcomeBtn,...(profAvatar===""?S.outcomeBtnOn:{}),fontSize:12}}>Aa</button>
+              {AVATAR_EMOJIS.map(e=>(
+                <button key={e} aria-label={`Avatar ${e}`} onClick={()=>setProfAvatar(e)}
+                  style={{...S.outcomeBtn,...(profAvatar===e?S.outcomeBtnOn:{}),fontSize:20,padding:"6px 0"}}>{e}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{width:"100%"}}>
+            <div style={S.sectionLabel}>Colour</div>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+              {AVATAR_COLORS.map(col=>(
+                <button key={col} aria-label={`Colour ${col}`} onClick={()=>setProfColor(col)}
+                  style={{width:34,height:34,borderRadius:"50%",background:col,border:profColor===col?"3px solid var(--text)":"3px solid transparent"}}/>
+              ))}
+            </div>
+          </div>
+          {error&&<ErrorBox>{error}</ErrorBox>}
+          {loading?<Loader msg={loadMsg}/>:<Btn gold onClick={saveProfile}>Save profile</Btn>}
+        </Screen>
+      )}
+
+      {/* ── FEEDBACK ── */}
+      {view==="feedback"&&(
+        <Screen>
+          <BackBtn onClick={()=>setView("home")}/>
+          <SectionTitle eyebrow="Feedback" title="Tell the Gaffer" sub="Spotted a bug or got an idea? It goes straight to the admin."/>
+          <Field label="Type">
+            <select style={S.input} value={fbCategory} onChange={e=>setFbCategory(e.target.value)} aria-label="Type of feedback">
+              <option value="idea">💡 Idea</option>
+              <option value="bug">🐞 Bug</option>
+              <option value="other">💬 Other</option>
+            </select>
+          </Field>
+          <Field label="Message">
+            <textarea style={{...S.input,minHeight:130,resize:"vertical"}} maxLength={1000} value={fbText}
+              onChange={e=>setFbText(e.target.value)} placeholder="What happened, or what would you like to see?" aria-label="Your message"/>
+          </Field>
+          <div style={{fontSize:11,color:"var(--muted)",alignSelf:"flex-end"}}>{fbText.length}/1000</div>
+          {fbNote&&<div style={S.successBanner}>{fbNote}</div>}
+          {error&&<ErrorBox>{error}</ErrorBox>}
+          {loading?<Loader msg={loadMsg}/>:<Btn gold onClick={sendFeedback} disabled={!fbText.trim()}>Send feedback</Btn>}
+        </Screen>
+      )}
+
       {/* ── STORY SO FAR ── */}
       {view==="story"&&(
         <StoryView history={history} round={round} subs={subs}
@@ -962,6 +1205,7 @@ export default function App() {
 
       {loading&&<div style={S.overlay}><Loader msg={loadMsg}/></div>}
     </div>
+    </ProfilesCtx.Provider>
   );
 }
 
@@ -1035,7 +1279,7 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
               </tr></thead>
               <tbody>{players.map(p=>(
                 <tr key={p.username}>
-                  <td style={cell}>{p.won?"🏆 ":""}{p.username}</td>
+                  <td style={cell}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Avatar name={p.username} size={20}/>{p.won?"🏆 ":""}{p.username}</span></td>
                   <td style={cell}>{p.entries}</td>
                   <td style={cell}>{p.best===null?"-":`${p.best}/5`}</td>
                   <td style={cell}>{p.acc===null?"-":<>{p.acc}% <span style={{color:"var(--muted)",fontSize:11}}>({p.right}/{p.made})</span></>}</td>
@@ -1177,7 +1421,7 @@ function RevealView({ round, results, subs, onRevealComplete, onHome, onLobby, r
                 <div style={{display:"flex",flexDirection:"column",gap:10,width:"100%"}}>
                   {outcome.winners.map((w,i)=>(
                     <div key={i} style={{display:"flex",alignItems:"center",gap:12,background:"rgba(240,192,64,0.08)",border:"1px solid rgba(240,192,64,0.25)",borderRadius:10,padding:"12px 16px"}}>
-                      <div style={{...S.playerAvatar,width:36,height:36,fontSize:15}}>{w.username[0].toUpperCase()}</div>
+                      <Avatar name={w.username} size={36}/>
                       <div>
                         <div style={{fontWeight:700,fontSize:16,color:"var(--text)"}}>{w.username}</div>
                         <div style={{fontSize:12,color:"var(--muted)"}}>{w.entryName}</div>
@@ -1217,7 +1461,7 @@ function RevealView({ round, results, subs, onRevealComplete, onHome, onLobby, r
                     <div key={i} style={{...S.playerRow,
                       background:i===0?"rgba(240,192,64,0.06)":"var(--surface2)",
                       borderColor:i===0?"rgba(240,192,64,0.2)":"var(--border)"}}>
-                      <div style={S.playerAvatar}>{s.username[0].toUpperCase()}</div>
+                      <Avatar name={s.username}/>
                       <div style={{flex:1}}>
                         <div style={{fontWeight:600,fontSize:14}}>{s.username}</div>
                         <div style={{fontSize:11,color:"var(--muted)"}}>{s.entryName}</div>
@@ -1289,7 +1533,7 @@ function Loader({ msg }) {
 function ErrorBox({ children, style }) {
   return (
     <div style={{background:"rgba(248,113,113,0.07)",border:"1px solid rgba(248,113,113,0.3)",
-      borderRadius:8,padding:"10px 14px",color:"#fca5a5",fontSize:13,width:"100%",textAlign:"center",...style}}>
+      borderRadius:8,padding:"10px 14px",color:"var(--danger-text)",fontSize:13,width:"100%",textAlign:"center",...style}}>
       {children}
     </div>
   );
@@ -1297,16 +1541,16 @@ function ErrorBox({ children, style }) {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const S = {
-  root:         { background:"#05080f",minHeight:"100vh",fontFamily:"'DM Sans',sans-serif",color:"var(--text)" },
-  nav:          { position:"fixed",top:0,left:0,right:0,zIndex:50,display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 20px",background:"rgba(5,8,15,0.92)",borderBottom:"1px solid var(--border)",backdropFilter:"blur(10px)" },
-  navLogo:      { fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.15em",color:"var(--gold)",cursor:"pointer" },
-  navBtn:       { background:"none",border:"1px solid var(--border)",color:"var(--muted)",padding:"5px 12px",borderRadius:6,fontSize:12 },
-  overlay:      { position:"fixed",inset:0,background:"rgba(5,8,15,0.85)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:80,backdropFilter:"blur(4px)" },
-  backdrop:     { position:"fixed",inset:0,background:"rgba(5,8,15,0.92)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,backdropFilter:"blur(6px)" },
+  root:         { background:"var(--bg)",minHeight:"100vh",fontFamily:"'DM Sans',sans-serif",color:"var(--text)" },
+  nav:          { position:"fixed",top:0,left:0,right:0,zIndex:50,display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 10px",gap:6,background:"var(--navbg)",borderBottom:"1px solid var(--border)",backdropFilter:"blur(10px)" },
+  navLogo:      { fontFamily:"'Bebas Neue',sans-serif",fontSize:15,letterSpacing:"0.06em",whiteSpace:"nowrap",color:"var(--gold)",cursor:"pointer" },
+  navBtn:       { background:"none",border:"1px solid var(--border)",color:"var(--muted)",padding:"5px 10px",borderRadius:6,fontSize:12,whiteSpace:"nowrap" },
+  overlay:      { position:"fixed",inset:0,background:"var(--scrim)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:80,backdropFilter:"blur(4px)" },
+  backdrop:     { position:"fixed",inset:0,background:"var(--scrim)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,backdropFilter:"blur(6px)" },
   modal:        { background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:16,padding:"28px 24px",width:"100%",maxWidth:320,display:"flex",flexDirection:"column",alignItems:"center",gap:2 },
   modalTitle:   { fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:2,color:"var(--gold)" },
   bigLogo:      { textAlign:"center",marginBottom:28 },
-  bigTitle:     { fontFamily:"'Bebas Neue',sans-serif",fontSize:52,letterSpacing:"0.15em",lineHeight:1,background:"linear-gradient(135deg,#f0c040,#f5d780,#c8960c)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" },
+  bigTitle:     { fontFamily:"'Bebas Neue',sans-serif",fontSize:52,letterSpacing:"0.15em",lineHeight:1,background:"linear-gradient(135deg,var(--g1),var(--g2),var(--g3))",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" },
   bigSub:       { fontSize:12,color:"var(--muted)",letterSpacing:"0.15em",textTransform:"uppercase",marginTop:5 },
   pill:         { marginTop:4,fontSize:13,textAlign:"center",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,padding:"7px 14px" },
   adminLink:    { background:"none",border:"none",color:"var(--muted)",fontSize:12,cursor:"pointer",marginTop:6,opacity:0.45 },
@@ -1344,7 +1588,7 @@ const S = {
   sectionLabel: { fontSize:10,letterSpacing:"0.12em",textTransform:"uppercase",color:"var(--muted)",marginBottom:9 },
   lobbyRow:     { display:"flex",alignItems:"center",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 13px",marginBottom:5 },
   playerRow:    { display:"flex",alignItems:"center",gap:10,background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:10,padding:"11px 13px" },
-  playerAvatar: { width:28,height:28,borderRadius:"50%",background:"linear-gradient(135deg,var(--gold),#c8960c)",color:"var(--ink)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,flexShrink:0 },
+  playerAvatar: { width:28,height:28,borderRadius:"50%",background:"linear-gradient(135deg,var(--gold),var(--g3))",color:"var(--ink)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,flexShrink:0 },
   revealCard:   { background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:12,padding:"13px 15px" },
   winnerCard:   { textAlign:"center",padding:"28px 24px",background:"linear-gradient(135deg,rgba(240,192,64,0.1),rgba(240,192,64,0.03))",border:"1px solid rgba(240,192,64,0.4)",borderRadius:16,width:"100%" },
   rolloverCard: { textAlign:"center",padding:"28px 24px",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:16,width:"100%" },
