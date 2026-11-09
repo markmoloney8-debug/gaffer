@@ -13,7 +13,9 @@ try { cfg = require("./config.js"); } catch (e) { /* no local config: rely on en
 const FOOTBALL_DATA_TOKEN = process.env.FOOTBALL_DATA_TOKEN || cfg.FOOTBALL_DATA_TOKEN;
 const SB_URL = process.env.SB_URL || cfg.SB_URL;
 const SB_KEY = process.env.SB_KEY || cfg.SB_KEY;
-if (!FOOTBALL_DATA_TOKEN || !SB_URL || !SB_KEY) { console.error("ERROR: missing FOOTBALL_DATA_TOKEN / SB_URL / SB_KEY"); process.exit(1); }
+function requireConfig() {
+  if (!FOOTBALL_DATA_TOKEN || !SB_URL || !SB_KEY) { console.error("ERROR: missing FOOTBALL_DATA_TOKEN / SB_URL / SB_KEY"); process.exit(1); }
+}
 
 const FD_BASE = "https://api.football-data.org/v4";
 const MIN = 60 * 1000;
@@ -47,10 +49,10 @@ async function sb(method, path, body, prefer) {
   return text ? JSON.parse(text) : null;
 }
 
-function resultFor(m, label) {
+function resultFor(m, label, log = console.log) {
   if (m.status !== "FINISHED") {
     if (["POSTPONED", "CANCELLED", "SUSPENDED"].includes(m.status)) {
-      console.log(`  WARNING: ${label} is ${m.status}. It stays "upcoming" until it is played.`);
+      log(`  WARNING: ${label} is ${m.status}. It stays "upcoming" until it is played.`);
     }
     return { result: "upcoming", score: null };
   }
@@ -61,7 +63,21 @@ function resultFor(m, label) {
   return { result: h > a ? "home" : h < a ? "away" : "draw", score: `${h}-${a}` };
 }
 
+
+// Maps each fixture to its result. Voided fixtures keep their void; unknown matches stay "upcoming".
+function mapResults(fixtures, prevResults, byId, log = console.log) {
+  const prev = Array.isArray(prevResults) ? prevResults : [];
+  return fixtures.map((f, i) => {
+    if (prev[i] && prev[i].result === "void") return prev[i];
+    const label = `${f.home} vs ${f.away}`;
+    const m = byId.get(f.matchId);
+    if (!m) { log(`  WARNING: ${label} not found in football-data.org response.`); return { result: "upcoming", score: null }; }
+    return resultFor(m, label, log);
+  });
+}
+
 async function main() {
+  requireConfig();
   console.log(`[${new Date().toISOString()}] Checking results...`);
 
   const rounds = await sb("GET", "round?id=eq.1");
@@ -95,14 +111,7 @@ async function main() {
   const data = await fdGet(`/competitions/${code}/matches?dateFrom=${isoDate(first - DAY)}&dateTo=${isoDate(last + 2 * DAY)}`);
   const byId = new Map((data.matches || []).map(m => [m.id, m]));
 
-  const prev = Array.isArray(round.results) ? round.results : [];
-  const results = fixtures.map((f, i) => {
-    if (prev[i] && prev[i].result === "void") return prev[i];   // voided by the admin: keep it
-    const label = `${f.home} vs ${f.away}`;
-    const m = byId.get(f.matchId);
-    if (!m) { console.log(`  WARNING: ${label} not found in football-data.org response.`); return { result: "upcoming", score: null }; }
-    return resultFor(m, label);
-  });
+  const results = mapResults(fixtures, round.results, byId);
 
   results.forEach((r, i) => {
     const f = fixtures[i];
@@ -115,7 +124,11 @@ async function main() {
   console.log(`Saved. ${done}/${results.length} results are final.`);
 }
 
-main().catch(err => {
-  console.error("ERROR:", err.message);
-  process.exit(1);
-});
+module.exports = { resultFor, mapResults };
+
+if (require.main === module) {
+  main().catch(err => {
+    console.error("ERROR:", err.message);
+    process.exit(1);
+  });
+}

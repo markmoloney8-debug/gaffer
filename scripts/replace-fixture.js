@@ -13,7 +13,9 @@ try { cfg = require("./config.js"); } catch (e) { /* no local config: rely on en
 const FOOTBALL_DATA_TOKEN = process.env.FOOTBALL_DATA_TOKEN || cfg.FOOTBALL_DATA_TOKEN;
 const SB_URL = process.env.SB_URL || cfg.SB_URL;
 const SB_KEY = process.env.SB_KEY || cfg.SB_KEY;
-if (!FOOTBALL_DATA_TOKEN || !SB_URL || !SB_KEY) { console.error("ERROR: missing FOOTBALL_DATA_TOKEN / SB_URL / SB_KEY"); process.exit(1); }
+function requireConfig() {
+  if (!FOOTBALL_DATA_TOKEN || !SB_URL || !SB_KEY) { console.error("ERROR: missing FOOTBALL_DATA_TOKEN / SB_URL / SB_KEY"); process.exit(1); }
+}
 
 const FD_BASE = "https://api.football-data.org/v4";
 const HOUR = 3600 * 1000;
@@ -44,6 +46,18 @@ async function sb(method, path, body, prefer) {
   return text ? JSON.parse(text) : null;
 }
 
+// Eligible replacements: not already in the round, at least 2h away (time to re-pick), before the next round.
+function pickReplacements(matches, usedIds, now, cutoff) {
+  return matches.filter(m => {
+    const ko = Date.parse(m.utcDate);
+    return ["SCHEDULED", "TIMED"].includes(m.status)
+        && m.homeTeam?.id && m.awayTeam?.id
+        && !usedIds.has(m.id)
+        && ko > now + 2 * HOUR
+        && ko <= cutoff;
+  });
+}
+
 // Next Tuesday 07:00 (UTC), the time the next round is generated.
 function nextRoundTime(now) {
   const d = new Date(now);
@@ -53,6 +67,7 @@ function nextRoundTime(now) {
 }
 
 async function main() {
+  requireConfig();
   const slotArg = parseInt(process.argv[2], 10);
   const force = process.argv.includes("--force");
   if (!(slotArg >= 1 && slotArg <= 5)) throw new Error("Usage: node replace-fixture.js <match number 1-5>");
@@ -76,14 +91,7 @@ async function main() {
   const cutoff = nextRoundTime(now) - 3 * HOUR;
   const data = await fdGet(`/competitions/${code}/matches?dateFrom=${isoDate(now)}&dateTo=${isoDate(cutoff + DAY)}`);
   const used = new Set(fixtures.map(f => f.matchId));
-  const candidates = (data.matches || []).filter(m => {
-    const ko = Date.parse(m.utcDate);
-    return ["SCHEDULED", "TIMED"].includes(m.status)
-        && m.homeTeam?.id && m.awayTeam?.id
-        && !used.has(m.id)
-        && ko > now + 2 * HOUR          // leaves time for players to re-pick
-        && ko <= cutoff;
-  });
+  const candidates = pickReplacements(data.matches || [], used, now, cutoff);
   console.log(`Found ${candidates.length} possible replacement(s).`);
   if (!candidates.length) throw new Error("No suitable replacement match found. Use Void in the admin panel instead.");
 
@@ -119,4 +127,8 @@ async function main() {
   console.log(`Cleared the pick for that match on ${cleared} entr${cleared === 1 ? "y" : "ies"}. Players can re-pick from the Lobby until 1 minute before kick-off.`);
 }
 
-main().catch(err => { console.error("ERROR:", err.message); process.exit(1); });
+module.exports = { nextRoundTime, pickReplacements };
+
+if (require.main === module) {
+  main().catch(err => { console.error("ERROR:", err.message); process.exit(1); });
+}
