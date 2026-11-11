@@ -138,3 +138,21 @@ end $$;
 drop trigger if exists feedback_rules on feedback;
 create trigger feedback_rules before insert or update on feedback
   for each row execute function enforce_feedback_rules();
+
+-- ─── Player-created groups: name/code format and a per-creator limit ───────────
+create or replace function groups_rules() returns trigger language plpgsql as $$
+begin
+  if char_length(new.name) < 2 or char_length(new.name) > 30 then
+    raise exception 'Group name must be 2-30 characters';
+  end if;
+  if new.invite_code !~ '^[A-Z0-9]{4,24}$' then
+    raise exception 'Invite code must be 4-24 letters or numbers';
+  end if;
+  if new.created_by is not null
+     and (select count(*) from groups where created_by = new.created_by) >= 3 then
+    raise exception 'Group limit reached (3 per player)';
+  end if;
+  return new;
+end $$;
+drop trigger if exists groups_rules on groups;
+create trigger groups_rules before insert on groups for each row execute function groups_rules();

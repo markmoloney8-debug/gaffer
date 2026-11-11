@@ -94,3 +94,6 @@ create table if not exists feedback (
 alter table feedback enable row level security;
 drop policy if exists "public access" on feedback;
 create policy "public access" on feedback for all using (true) with check (true);
+
+-- Player-created groups: remember who started a group
+alter table groups add column if not exists created_by text;
