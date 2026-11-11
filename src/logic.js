@@ -19,8 +19,9 @@ export function msUntilDeadline(fixtures, now = Date.now()) {
 export function fmtCountdown(ms) {
   if (ms <= 0) return "00:00:00";
   const s = Math.floor(ms/1000);
-  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
-  return [h,m,sec].map(n=>String(n).padStart(2,"0")).join(":");
+  const d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60), sec = s%60;
+  const hms = [h,m,sec].map(n=>String(n).padStart(2,"0")).join(":");
+  return d > 0 ? `${d}d ${hms}` : hms;      // "9d 16:16:33" once there is a day or more to go
 }
 
 
