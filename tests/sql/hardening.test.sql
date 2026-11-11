@@ -129,4 +129,30 @@ do $$ begin
 end $$;
 
 rollback;
+
+-- ─── Player-created groups ─────────────────────────────────────────────────────
+do $$
+declare ok boolean;
+begin
+  insert into groups(name, invite_code, created_by) values ('Mine 1','MINE0001','zed'),('Mine 2','MINE0002','zed'),('Mine 3','MINE0003','zed');
+  begin
+    insert into groups(name, invite_code, created_by) values ('Mine 4','MINE0004','zed');
+    raise exception 'FAIL: fourth own group was allowed';
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+    if sqlerrm not like '%Group limit%' then raise exception 'FAIL: wrong error %', sqlerrm; end if;
+  end;
+  begin
+    insert into groups(name, invite_code) values ('x','GOODCODE');
+    raise exception 'FAIL: 1-char name allowed';
+  exception when others then if sqlerrm like 'FAIL%' then raise; end if; end;
+  begin
+    insert into groups(name, invite_code) values ('Okay','ab');
+    raise exception 'FAIL: short/lowercase code allowed';
+  exception when others then if sqlerrm like 'FAIL%' then raise; end if; end;
+  -- admin-made groups (no creator) are not limited
+  insert into groups(name, invite_code) values ('Admin A','ADMINAAA'),('Admin B','ADMINBBB'),('Admin C','ADMINCCC'),('Admin D','ADMINDDD');
+  raise notice 'PASS: player-created group rules';
+end $$;
+
 \echo ALL SQL TESTS PASSED
