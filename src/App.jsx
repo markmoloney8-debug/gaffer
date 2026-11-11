@@ -82,7 +82,7 @@ const OUTCOMES = [
 ];
 
 // ─── Avatars, group badges ────────────────────────────────────────────────────
-const AVATAR_EMOJIS = ["⚽","🧢","🦁","🐯","🦊","🐻","🐼","🐸","🐵","🦉","🦄","🐙","👑","🔥","⭐","🍀","🎯","🚀","🍺","☕","🎩","🕶️","🧠","💪"];
+const AVATAR_EMOJIS = ["⚽","🏆","🥅","🧤","👟","⛳","🎯","🥊","🧢","🎩","🕶️","👑","🦁","🐺","🦅","🦈","🐂","🔥","⚡","🏎️","🎸","🍺","🥃","☕"];
 const AVATAR_COLORS = ["#f0c040","#34d399","#60a5fa","#a78bfa","#f472b6","#fb923c","#f87171","#94a3b8"];
 const GROUP_EMOJIS  = ["","⚽","🏆","🔥","🍺","🦁","🐯","🚀","🎯","👑","🍀","⭐","🧠","🎩"];
 const gLabel = g => g ? `${g.emoji ? g.emoji + " " : ""}${g.name}` : "";
@@ -1196,7 +1196,7 @@ export default function App() {
                         <Avatar name={p}/>
                         <div style={{flex:1}}>
                           <div style={{fontWeight:600,fontSize:14}}>{p}</div>
-                          <div style={{fontSize:11,color:"var(--muted)"}}>{pe.length} entr{pe.length!==1?"ies":"y"}: {pe.map(e=>e.entryName).join(", ")}</div>
+                          <div style={{fontSize:11,color:"var(--muted)"}}>{pe.length} entr{pe.length!==1?"ies":"y"}</div>
                         </div>
                         <span style={{fontSize:11,color:"var(--muted)"}}>🔒</span>
                       </div>
