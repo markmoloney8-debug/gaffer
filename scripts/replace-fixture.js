@@ -23,6 +23,7 @@ const DAY  = 24 * HOUR;
 const isoDate    = ms => new Date(ms).toISOString().slice(0, 10);
 const londonDate = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" });
 const londonTime = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const { formForMatch } = require("./form.js");
 const teamName   = t => (t.shortName || t.name || "TBC").slice(0, 20);
 
 async function fdGet(path) {
@@ -98,10 +99,12 @@ async function main() {
   const m = candidates[Math.floor(Math.random() * candidates.length)];
   const ko = new Date(m.utcDate);
   const old = fixtures[slot];
+  let form = null;
+  try { form = formForMatch(m, (await fdGet(`/competitions/${code}/matches?status=FINISHED`)).matches || []); } catch (e) { console.log(`WARNING: no recent form for the replacement (${e.message}).`); }
   fixtures[slot] = {
     matchId: m.id, home: teamName(m.homeTeam), away: teamName(m.awayTeam),
     date: londonDate.format(ko).replace(",", ""), time: londonTime.format(ko),
-    kickoffIso: m.utcDate, kickoffTs: ko.getTime(), replaced: true,
+    kickoffIso: m.utcDate, kickoffTs: ko.getTime(), replaced: true, ...(form ? { form } : {}),
   };
 
   const patch = { fixtures };

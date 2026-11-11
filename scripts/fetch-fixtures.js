@@ -36,6 +36,7 @@ const TOURNAMENTS = [
 const isoDate    = ms => new Date(ms).toISOString().slice(0, 10);
 const londonDate = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" });
 const londonTime = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const { formForMatch } = require("./form.js");
 const teamName   = t => (t.shortName || t.name || "TBC").slice(0, 20);
 
 function shuffle(arr) {
@@ -61,9 +62,9 @@ function pickCandidates(matches, now, cutoff) {
   });
 }
 
-function toFixture(m) {
+function toFixture(m, finished) {
   const ko = new Date(m.utcDate);
-  return {
+  const fx = {
     matchId:    m.id,
     home:       teamName(m.homeTeam),
     away:       teamName(m.awayTeam),
@@ -72,6 +73,8 @@ function toFixture(m) {
     kickoffIso: m.utcDate,
     kickoffTs:  ko.getTime(),
   };
+  if (finished) fx.form = formForMatch(m, finished);
+  return fx;
 }
 
 // A round is still running until 3 hours after its last kick-off. Weekly runs leave a running round
@@ -158,10 +161,17 @@ async function main() {
     throw new Error("Fewer than 5 upcoming matches found. The existing round has been left untouched.");
   }
 
+  // Recent form is a nice extra. If this lookup fails, the round is still created without it.
+  let finished = null;
+  try {
+    finished = (await fdGet(`/competitions/${comp.code}/matches?status=FINISHED`)).matches || [];
+    console.log(`Loaded ${finished.length} finished match(es) for recent form.`);
+  } catch (e) { console.log(`WARNING: could not load recent form (${e.message}). Continuing without it.`); }
+
   const fixtures = shuffle(candidates)
     .slice(0, 5)
     .sort((a, b) => Date.parse(a.utcDate) - Date.parse(b.utcDate))
-    .map(toFixture);
+    .map(m => toFixture(m, finished));
 
   console.log("Fixtures picked:");
   fixtures.forEach((f, i) => console.log(`  ${i + 1}. ${f.home} vs ${f.away} - ${f.date} ${f.time}`));
