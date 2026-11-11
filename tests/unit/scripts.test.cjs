@@ -279,3 +279,48 @@ test("if GitHub refuses, the feedback stays unsent so the next run retries it", 
   assert.equal(failures, 1);
   assert.ok(!calls.includes("PATCH"));
 });
+
+// ── Recent form ────────────────────────────────────────────────────────────
+const { formFor, formForMatch, outcomeFor } = require("../../scripts/form.js");
+const fm = (id, utcDate, home, away, h, a, extra = {}) => ({ id, utcDate, status: "FINISHED", homeTeam: { id: home }, awayTeam: { id: away }, score: { fullTime: { home: h, away: a }, ...extra } });
+
+test("form: results are from the team's own point of view, oldest first, newest last", () => {
+  const ms = [
+    fm(1, "2026-10-01T15:00:00Z", 10, 20, 2, 0),   // team 10 home win  -> W
+    fm(2, "2026-10-08T15:00:00Z", 30, 10, 1, 1),   // draw              -> D
+    fm(3, "2026-10-15T15:00:00Z", 40, 10, 3, 0),   // team 10 away loss -> L
+    fm(4, "2026-10-22T15:00:00Z", 10, 50, 0, 1),   // team 10 home loss -> L
+    fm(5, "2026-10-29T15:00:00Z", 60, 10, 0, 2),   // away win          -> W
+  ];
+  assert.deepEqual(formFor(ms, 10), ["W", "D", "L", "L", "W"]);
+  assert.deepEqual(formFor(ms, 20), ["L"]);
+});
+
+test("form: keeps only the latest five, and ignores unfinished or other teams' matches", () => {
+  const ms = [];
+  for (let i = 1; i <= 8; i++) ms.push(fm(i, `2026-09-${String(i).padStart(2, "0")}T15:00:00Z`, 10, 99, i, 0));   // 8 wins
+  ms.push({ id: 50, utcDate: "2026-09-20T15:00:00Z", status: "SCHEDULED", homeTeam: { id: 10 }, awayTeam: { id: 99 }, score: { fullTime: { home: null, away: null } } });
+  ms.push(fm(60, "2026-09-21T15:00:00Z", 77, 88, 1, 0));
+  assert.deepEqual(formFor(ms, 10), ["W", "W", "W", "W", "W"]);
+  assert.equal(formFor(ms, 10).length, 5);
+  assert.deepEqual(formFor(ms, 10, 3), ["W", "W", "W"]);
+});
+
+test("form: uses the 90-minute score, so an extra-time win still counts as a draw", () => {
+  const m = fm(1, "2026-10-01T15:00:00Z", 10, 20, 2, 1, { regularTime: { home: 1, away: 1 } });
+  assert.equal(outcomeFor(m, 10), "D");
+});
+
+test("form: a team with no matches, or an unknown id, gets an empty list", () => {
+  assert.deepEqual(formFor([], 10), []);
+  assert.deepEqual(formFor([fm(1, "2026-10-01T15:00:00Z", 1, 2, 1, 0)], undefined), []);
+  assert.deepEqual(formForMatch({ homeTeam: { id: 1 }, awayTeam: { id: 2 } }, null), { home: [], away: [] });
+});
+
+test("toFixture adds form only when finished matches are supplied", () => {
+  const { toFixture } = require("../../scripts/fetch-fixtures.js");
+  const m = { id: 9, utcDate: "2026-11-21T12:30:00Z", homeTeam: { id: 1, shortName: "Arsenal" }, awayTeam: { id: 2, shortName: "Chelsea" } };
+  assert.equal("form" in toFixture(m), false);
+  const f = toFixture(m, [fm(1, "2026-10-01T15:00:00Z", 1, 5, 2, 0), fm(2, "2026-10-08T15:00:00Z", 6, 2, 3, 0)]);
+  assert.deepEqual(f.form, { home: ["W"], away: ["L"] });
+});
