@@ -431,3 +431,156 @@ test("feedback with markup is shown as plain text in the admin list", async () =
     assert.equal(await w.page.evaluate(() => window.__pwned), undefined);
   });
 });
+
+// ── Invite links, sharing, own groups, stats ───────────────────────────────
+test("a short password is refused at sign-up, with a hint to use a unique one", async () => {
+  await run({}, async w => {
+    await w.click("Register");
+    await w.text("password you don't use anywhere else");
+    await w.page.getByPlaceholder("your_username").fill("newbie");
+    await w.page.locator('input[type="password"]').nth(0).fill("abc");
+    await w.page.locator('input[type="password"]').nth(1).fill("abc");
+    await w.page.getByPlaceholder("Ask the admin").fill("ALPHA1");
+    await w.click(/Create Account/);
+    await w.text("at least 6 characters");
+    assert.equal(w.tables.users.some(u => u.username === "newbie"), false);
+  });
+});
+
+test("an invite link opens sign-up with the code filled in", async () => {
+  await run({ path: "/?join=beta22" }, async w => {
+    await w.text("Confirm Password");
+    assert.equal(await w.page.getByPlaceholder("Ask the admin").inputValue(), "BETA22");
+    await w.page.getByPlaceholder("your_username").fill("newbie");
+    await w.page.locator('input[type="password"]').nth(0).fill("secret1");
+    await w.page.locator('input[type="password"]').nth(1).fill("secret1");
+    await w.click(/Create Account/);
+    await w.text("newbie · Beta");
+  });
+});
+
+test("a signed-in player opening an invite link lands on Join with the code filled in", async () => {
+  await run({ loginAs: "ann", path: "/?join=BETA22" }, async w => {
+    await w.text("Join Another Group");
+    assert.equal(await w.page.getByPlaceholder("e.g. GAFFERMATES26").inputValue(), "BETA22");
+    await w.click(/Join Group/);
+    await w.text("Weekly Football Prediction League");
+    assert.ok(w.tables.memberships.some(m => m.username === "ann" && m.group_id === "g-beta"));
+  });
+});
+
+test("sharing an invite copies a link that opens straight to sign-up", async () => {
+  await run({ loginAs: "ann" }, async w => {
+    await w.context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: "https://gaffer.test" });
+    await w.click(/Join another group/);
+    await w.text("Invite friends to Alpha");
+    await w.click(/Share invite link/);
+    await w.text("Invite copied");
+    const clip = await w.page.evaluate(() => navigator.clipboard.readText());
+    assert.match(clip, /https:\/\/gaffer\.test\/\?join=ALPHA1/);
+    assert.match(clip, /Alpha/);
+  });
+});
+
+test("a player can start their own group, becomes its first member, and gets a working code", async () => {
+  await run({ loginAs: "ann" }, async w => {
+    await w.click(/Join another group/);
+    await w.page.getByLabel("New group name").fill("Sunday League");
+    await w.click(/Create group/);
+    await w.text("Weekly Football Prediction League");
+    const g = w.tables.groups.find(x => x.name === "Sunday League");
+    assert.ok(g, "group saved");
+    assert.equal(g.created_by, "ann");
+    assert.match(g.invite_code, /^[A-Z0-9]{8}$/);
+    assert.ok(w.tables.memberships.some(m => m.username === "ann" && m.group_id === g.id));
+    assert.ok(w.tables.group_state.some(s => s.group_id === g.id), "run state created");
+    assert.equal(await w.page.locator("select").first().inputValue(), g.id, "switched into the new group");
+  });
+});
+
+test("hitting the group limit shows a friendly message and creates nothing", async () => {
+  await run({ loginAs: "ann" }, async w => {
+    w.fake.hooks.beforeInsert.groups = () => "Group limit reached (3 per player)";
+    const before = w.tables.groups.length;
+    await w.click(/Join another group/);
+    await w.page.getByLabel("New group name").fill("One too many");
+    await w.click(/Create group/);
+    await w.text("up to 3 of your own");
+    assert.equal(w.tables.groups.length, before);
+  });
+});
+
+test("the profile page shows a player's stats from completed rounds", async () => {
+  const setup = t => t.history.push(
+    { group_id: "g-alpha", series: 1, week: 1, username: "ann", entry_name: "Entry 1", correct: 3, total: 5, perfect: false },
+    { group_id: "g-alpha", series: 1, week: 2, username: "ann", entry_name: "Entry 1", correct: 4, total: 5, perfect: false },
+    { group_id: "g-alpha", series: 2, week: 1, username: "ann", entry_name: "Entry 1", correct: 5, total: 5, perfect: true },
+    { group_id: "g-alpha", series: 1, week: 1, username: "bob", entry_name: "Entry 1", correct: 0, total: 5, perfect: false });
+  await run({ loginAs: "ann", setup }, async w => {
+    await w.click(/My Profile/);
+    const stats = w.page.getByLabel("Your stats");
+    await stats.waitFor();
+    const text = await stats.innerText();
+    assert.match(text, /3\s+ENTRIES/i);
+    assert.match(text, /80%/);                         // 12 of 15
+    assert.match(text, /5\/5/);
+    assert.match(text, /3\s+PER WIN/i);
+    assert.match(text, /1 win/);
+  });
+});
+
+test("a player with no completed rounds sees dashes, not NaN", async () => {
+  await run({ loginAs: "ann" }, async w => {
+    await w.click(/My Profile/);
+    await w.page.getByLabel("Your stats").waitFor();
+    assert.doesNotMatch(await w.page.getByLabel("Your stats").innerText(), /NaN|undefined/);
+  });
+});
+
+test("the winners can share their result", async () => {
+  const win = ["home", "draw", "away", "home", "home"];
+  const setup = t => t.submissions.push(seeEntry("ann", "g-alpha", "Entry 1", ...win));
+  await run({ loginAs: "ann", setup, kickoff: locked, results: R(...win) }, async w => {
+    await w.context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: "https://gaffer.test" });
+    await w.click(/Lobby/);
+    await w.click(/Check Results/);
+    for (let i = 0; i < 4; i++) await w.click(/Reveal next result/);
+    await w.click(/See the Outcome/);
+    await w.text("WE HAVE A WINNER");
+    await w.click(/Share result/);
+    await w.text("Copied");
+    assert.match(await w.page.evaluate(() => navigator.clipboard.readText()), /ann got all 5 right/);
+  });
+});
+
+test("My Entries shows each fixture with the team picked", async () => {
+  const setup = t => t.submissions.push(seeEntry("ann", "g-alpha", "Entry 1", "home", "draw", "away", "home", "away"));
+  await run({ loginAs: "ann", setup }, async w => {
+    await w.click(/Lobby/);
+    await w.click(/My Entries/);
+    const list = w.page.getByLabel("Entry 1 picks");
+    await list.waitFor();
+    const text = await list.innerText();
+    assert.match(text, /Arsenal v Chelsea\s+🏠 Arsenal win/);
+    assert.match(text, /Man City v Liverpool\s+🤝? ?Draw/);
+    assert.match(text, /Spurs v Man Utd\s+\S+ Man Utd win/);
+    assert.match(text, /Brighton v Wolves\s+\S+ Wolves win/);
+  });
+});
+
+test("new entry cards show each team's recent form, and nothing when there is none", async () => {
+  const setup = t => {
+    const fx = t.round[0].fixtures;
+    fx[0].form = { home: ["W", "W", "D", "L", "W"], away: ["L", "L", "D", "W", "L"] };
+  };
+  await run({ loginAs: "ann", setup }, async w => {
+    await w.click(/Lobby/);
+    await w.click(/My Entries/);
+    await w.click(/Add Entry/);
+    const home = w.page.getByLabel("Arsenal recent form: W W D L W");
+    await home.waitFor();
+    await w.page.getByLabel("Chelsea recent form: L L D W L").waitFor();
+    assert.equal(await w.page.getByLabel(/recent form/).count(), 2, "only the fixture that has form shows any");
+    assert.equal(await w.page.getByText("Form", { exact: true }).count(), 1);
+  });
+});

@@ -39,7 +39,7 @@ export const fixtures = (firstKickoffOffsetMs) => [
 export const picks = (...p) => Object.fromEntries(p.map((v, i) => [String(i), v]));
 
 // A fresh world: two groups (Alpha / Beta), a round, and any extra setup the test wants.
-export async function newWorld(browser, bundle, { loginAs, setup, kickoff = 48 * HOUR, results = null } = {}) {
+export async function newWorld(browser, bundle, { loginAs, setup, kickoff = 48 * HOUR, results = null, path = "/" } = {}) {
   const fake = createFakeSupabase();
   const { tables } = fake;
   tables.groups.push({ id: "g-alpha", name: "Alpha", invite_code: "ALPHA1" }, { id: "g-beta", name: "Beta", invite_code: "BETA22" });
@@ -59,7 +59,7 @@ export async function newWorld(browser, bundle, { loginAs, setup, kickoff = 48 *
   await context.route("**/*", route => {
     const url = route.request().url();
     if (url.includes("/rest/v1/")) return fake.handle(route);
-    if (url === ORIGIN + "/") return route.fulfill({ status: 200, contentType: "text/html", body: HTML });
+    { const u = new URL(url); if (u.origin + u.pathname === ORIGIN + "/") return route.fulfill({ status: 200, contentType: "text/html", body: HTML }); }
     if (url === ORIGIN + "/app.js") return route.fulfill({ status: 200, contentType: "application/javascript", body: bundle });
     return route.abort();                                // fonts and anything else external
   });
@@ -67,6 +67,6 @@ export async function newWorld(browser, bundle, { loginAs, setup, kickoff = 48 *
   const errors = [];
   page.on("pageerror", e => errors.push(e.message));
   page.on("dialog", d => d.accept());                    // the Void button asks for confirmation
-  await page.goto(ORIGIN + "/");
+  await page.goto(ORIGIN + path);
   return { page, fake, tables, errors, context, close: () => context.close() };
 }
