@@ -43,6 +43,32 @@ styleEl.textContent = css;
 document.head.appendChild(styleEl);
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
+// Optional voluntary tip link shown on the winner screen (e.g. "https://monzo.me/yourname"). Leave "" to hide it.
+const TIP_URL           = "https://monzo.me/markmoloney4?h=3txBA-";
+const MAX_OWN_GROUPS    = 3;   // groups one player may start (also enforced in the database)
+function inviteLink(code) { return `${window.location.origin}/?join=${encodeURIComponent(code)}`; }
+async function shareOrCopy(text, url) {
+  try { if (navigator.share) { await navigator.share({ text, url }); return "shared"; } }
+  catch (e) { if (e && e.name === "AbortError") return "cancelled"; }
+  try { await navigator.clipboard.writeText(`${text} ${url}`); return "copied"; } catch { return "failed"; }
+}
+function randomCode() {
+  const a = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s = "";
+  for (let i = 0; i < 8; i++) s += a[Math.floor(Math.random() * a.length)];
+  return s;
+}
+function profileStats(rows) {
+  const entries = rows.length;
+  const correct = rows.reduce((n, r) => n + (r.correct || 0), 0);
+  const total   = rows.reduce((n, r) => n + (r.total || 0), 0);
+  const wins    = rows.filter(r => r.perfect).length;
+  return {
+    entries, wins,
+    accuracy: total ? Math.round((correct / total) * 100) : null,
+    best: rows.reduce((m, r) => Math.max(m, r.correct || 0), 0),
+    perWin: wins ? Math.round((entries / wins) * 10) / 10 : null,
+  };
+}
 const ADMIN_PIN         = "085419";                        // ← change this
 const MAX_ENTRIES       = 5;
 const SB_URL            = "https://oszrnwhyvmvccxxepsnm.supabase.co";
@@ -62,6 +88,28 @@ const GROUP_EMOJIS  = ["","⚽","🏆","🔥","🍺","🦁","🐯","🚀","🎯"
 const gLabel = g => g ? `${g.emoji ? g.emoji + " " : ""}${g.name}` : "";
 const ProfilesCtx = createContext({});
 
+// Recent form chips: W / D / L, oldest to newest. Letters as well as colours, so it works without colour.
+function FormChips({ form, align = "left", label }) {
+  if (!form || !form.length) return <div style={{flex:1}}/>;
+  const col = { W:"var(--green)", D:"var(--muted)", L:"var(--red)" };
+  return (
+    <div style={{flex:1,display:"flex",gap:3,justifyContent:align==="right"?"flex-end":"flex-start"}} aria-label={`${label} recent form: ${form.join(" ")}`}>
+      {form.map((r,i)=>(
+        <span key={i} style={{width:17,height:17,borderRadius:4,fontSize:10,fontWeight:700,display:"inline-flex",alignItems:"center",justifyContent:"center",color:"#fff",background:col[r]||"var(--muted)",opacity:i===form.length-1?1:0.8}}>{r}</span>
+      ))}
+    </div>
+  );
+}
+function FormRow({ f }) {
+  if (!f.form || (!(f.form.home||[]).length && !(f.form.away||[]).length)) return null;
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:8,margin:"2px 0 8px"}}>
+      <FormChips form={f.form.home} label={f.home}/>
+      <span style={{fontSize:9,color:"var(--muted)",letterSpacing:"0.08em",textTransform:"uppercase"}}>Form</span>
+      <FormChips form={f.form.away} align="right" label={f.away}/>
+    </div>
+  );
+}
 function AvatarBubble({ emoji, color, initial, size = 28 }) {
   const base = { width:size, height:size, borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 };
   if (emoji) return <div style={{ ...base, background: color || "var(--gold)", fontSize: Math.round(size*0.55), lineHeight:1 }}>{emoji}</div>;
@@ -178,8 +226,8 @@ const db = {
     const rows = await sb.get("groups", `id=eq.${id}`);
     return rows[0] || null;
   },
-  async createGroup(name, code, emoji) {
-    const rows = await sb.insert("groups", { name, invite_code: code, emoji: emoji || null });
+  async createGroup(name, code, emoji, createdBy) {
+    const rows = await sb.insert("groups", { name, invite_code: code, emoji: emoji || null, ...(createdBy ? { created_by: createdBy } : {}) });
     await sb.insert("group_state", { group_id: rows[0].id });
     return rows[0];
   },
@@ -312,9 +360,10 @@ function PinModal({ onSuccess, onCancel }) {
 
 // ─── Auth Screen ──────────────────────────────────────────────────────────────
 function AuthScreen({ onLogin, theme, toggleTheme }) {
-  const [tab,setTab]=useState("login");
+  const [tab,setTab]=useState(() => { try { return new URLSearchParams(window.location.search).get("join") ? "register" : "login"; } catch { return "login"; } });
   const [u,setU]=useState(""); const [pw,setPw]=useState("");
-  const [cpw,setCpw]=useState(""); const [inv,setInv]=useState("");
+  const joinParam = (() => { try { return (new URLSearchParams(window.location.search).get("join") || "").toUpperCase(); } catch { return ""; } })();
+  const [cpw,setCpw]=useState(""); const [inv,setInv]=useState(joinParam);
   const [err,setErr]=useState(""); const [loading,setLoading]=useState(false);
 
   async function login() {
@@ -333,7 +382,7 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
     const trimmed=u.trim();
     if (trimmed.length<2)                        { setErr("Username must be at least 2 characters."); setLoading(false); return; }
     if (trimmed.length>20)                       { setErr("Username must be 20 characters or less."); setLoading(false); return; }
-    if (pw.length<4)                             { setErr("Password must be at least 4 characters."); setLoading(false); return; }
+    if (pw.length<6)                             { setErr("Password must be at least 6 characters."); setLoading(false); return; }
     if (pw!==cpw)                                { setErr("Passwords don't match."); setLoading(false); return; }
     try {
       const group = await db.getGroupByCode(inv.trim().toUpperCase());
@@ -372,6 +421,7 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
         <Field label="Username"><input style={S.input} value={u} onChange={e=>setU(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} placeholder="your_username" autoFocus autoCapitalize="none"/></Field>
         <Field label="Password"><input style={S.input} type="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} placeholder="••••••••"/></Field>
         {tab==="register"&&<>
+          <div style={{fontSize:11,color:"var(--muted)",lineHeight:1.5,marginTop:-4}}>🔒 Use a password you don't use anywhere else. This is a fun game, not a bank.</div>
           <Field label="Confirm Password"><input style={S.input} type="password" value={cpw} onChange={e=>setCpw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} placeholder="••••••••"/></Field>
           <Field label="Invite Code"><input style={S.input} value={inv} onChange={e=>setInv(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} placeholder="Ask the admin" autoCapitalize="characters"/></Field>
         </>}
@@ -407,6 +457,9 @@ export default function App() {
   });
   const [profiles,  setProfiles]  = useState({});
   const [profAvatar, setProfAvatar] = useState("");
+  const [myStats,   setMyStats]   = useState(null);
+  const [shareNote, setShareNote]  = useState("");
+  const [ownGroupName, setOwnGroupName] = useState("");
   const [profColor,  setProfColor]  = useState(AVATAR_COLORS[0]);
   const [newGroupEmoji, setNewGroupEmoji] = useState("");
   const [fbCategory, setFbCategory] = useState("idea");
@@ -431,6 +484,29 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
     try { localStorage.setItem("fp_theme", theme); } catch {}
   }, [theme]);
+  // ── Installable app + invite links ───────────────────────────────────────
+  useEffect(() => {
+    try {
+      const add = (tag, attrs) => { const el = document.createElement(tag); Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v)); document.head.appendChild(el); };
+      if (!document.querySelector('link[rel="manifest"]')) {
+        add("link", { rel: "manifest", href: "/manifest.webmanifest" });
+        add("meta", { name: "theme-color", content: "#05080f" });
+        add("link", { rel: "apple-touch-icon", href: "/icon-192.png" });
+        add("meta", { name: "apple-mobile-web-app-capable", content: "yes" });
+      }
+      if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+    } catch {}
+  }, []);
+  useEffect(() => {
+    if (!username || !appReady) return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const code = (params.get("join") || "").toUpperCase();
+      if (!code) return;
+      setJoinCode(code); setJoinErr(""); setView("join");
+      window.history.replaceState({}, "", window.location.pathname);
+    } catch {}
+  }, [username, appReady]);
   const toggleTheme = () => setTheme(t => t === "dark" ? "light" : "dark");
 
   // ── Player avatars ────────────────────────────────────────────────────────
@@ -446,7 +522,26 @@ export default function App() {
     const me = profiles[username] || {};
     setProfAvatar(me.avatar || "");
     setProfColor(me.avatar_color || AVATAR_COLORS[0]);
-    setError(""); setView("profile");
+    setError(""); setMyStats(null); setView("profile");
+    sb.get("history", `username=eq.${encodeURIComponent(username)}&select=correct,total,perfect`)
+      .then(rows => setMyStats(profileStats(rows))).catch(() => setMyStats(profileStats([])));
+  }
+  async function shareGroupInvite() {
+    const g = myGroups.find(x => x.id === groupId); if (!g) return;
+    const r = await shareOrCopy(`Join my group "${g.name}" on The Gaffer, the weekly football prediction game. Use code ${g.invite_code}.`, inviteLink(g.invite_code));
+    setShareNote(r === "copied" ? "Invite copied. Paste it into your group chat." : r === "failed" ? "Couldn't share. Copy the code instead." : "");
+  }
+  async function createOwnGroup() {
+    const name = ownGroupName.trim();
+    if (name.length < 2) { setJoinErr("Give your group a name (2+ characters)."); return; }
+    setJoinErr(""); setLoading(true); setLoadMsg("Creating group…");
+    try {
+      const g = await db.createGroup(name, randomCode(), "", username);
+      await db.addMembership(username, g.id);
+      setMyGroups(gs => [...gs, g]); setOwnGroupName("");
+      await switchGroup(g.id);
+      setShareNote("Group created! Share the invite from the Join screen.");
+    } catch { setJoinErr(`Couldn't create the group. You can start up to ${MAX_OWN_GROUPS} of your own.`); setLoading(false); }
   }
   async function saveProfile() {
     setLoading(true); setLoadMsg("Saving…"); setError("");
@@ -947,8 +1042,17 @@ export default function App() {
                   <Avatar name={e.username}/>
                   <div style={{flex:1}}>
                     <div style={{fontWeight:600,fontSize:14}}>{e.entryName}</div>
-                    <div style={{fontSize:11,color:"var(--muted)"}}>
-                      {[0,1,2,3,4].map(i=>OUTCOMES.find(o=>o.key===(e.preds[String(i)]||e.preds[i]))?.icon||"?").join(" ")}
+                    <div style={{display:"flex",flexDirection:"column",gap:3,marginTop:6}} aria-label={`${e.entryName} picks`}>
+                      {round.fixtures.map((f,fi)=>{
+                        const k=e.preds[String(fi)]||e.preds[fi];
+                        const pick=k==="home"?`${f.home} win`:k==="away"?`${f.away} win`:k==="draw"?"Draw":"Pick needed";
+                        return (
+                          <div key={fi} style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:12,lineHeight:1.4}}>
+                            <span style={{color:"var(--muted)"}}>{f.home} v {f.away}{f.form&&((f.form.home||[]).length||(f.form.away||[]).length)?<span style={{opacity:0.9}}> · {(f.form.home||[]).join("")||"–"} / {(f.form.away||[]).join("")||"–"}</span>:null}</span>
+                            <span style={{fontWeight:600,color:k?"var(--text)":"var(--red)",textAlign:"right"}}>{OUTCOMES.find(o=>o.key===k)?.icon||"⚠️"} {pick}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                   <span style={{fontSize:11,color:"var(--muted)"}}>🔒</span>
@@ -986,6 +1090,7 @@ export default function App() {
                   <span style={S.vsChip}>VS</span>
                   <span style={{...S.teamName,textAlign:"right"}}>{f.away}</span>
                 </div>
+                <FormRow f={f}/>
                 <div style={S.outcomeRow}>
                   {OUTCOMES.map(o=>(
                     <button key={o.key} style={{...S.outcomeBtn,...(preds[i]===o.key?S.outcomeBtnOn:{})}}
@@ -1132,6 +1237,19 @@ export default function App() {
               You're in: {myGroups.map(gLabel).join(", ")}
             </div>
           )}
+          {groupId&&myGroups.some(x=>x.id===groupId)&&(
+            <div style={{...S.card,width:"100%"}}>
+              <div style={S.sectionLabel}>Invite friends to {groupName}</div>
+              <Btn onClick={shareGroupInvite}>📨 Share invite link</Btn>
+              {shareNote&&<div style={{fontSize:12,color:"var(--green)",marginTop:8,textAlign:"center"}}>{shareNote}</div>}
+            </div>
+          )}
+          <div style={{...S.card,width:"100%"}}>
+            <div style={S.sectionLabel}>Start your own group</div>
+            <input style={S.input} aria-label="New group name" value={ownGroupName} maxLength={30} placeholder="Group name" onChange={e=>setOwnGroupName(e.target.value)}/>
+            <div style={{height:8}}/>
+            <Btn onClick={createOwnGroup} disabled={ownGroupName.trim().length<2}>➕ Create group</Btn>
+          </div>
         </Screen>
       )}
 
@@ -1141,6 +1259,17 @@ export default function App() {
           <BackBtn onClick={()=>setView("home")}/>
           <SectionTitle eyebrow="You" title="My Profile" sub="Pick an avatar. Everyone in your groups will see it."/>
           <AvatarBubble emoji={profAvatar} color={profColor} initial={(username||"?")[0].toUpperCase()} size={72}/>
+          {myStats&&(
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,width:"100%"}} aria-label="Your stats">
+              {[["Entries",myStats.entries],["Accuracy",myStats.accuracy==null?"–":`${myStats.accuracy}%`],["Best",myStats.entries?`${myStats.best}/5`:"–"],["Per win",myStats.perWin==null?"–":myStats.perWin]].map(([l,v])=>(
+                <div key={l} style={{...S.card,padding:"10px 4px",textAlign:"center"}}>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--gold)",letterSpacing:1}}>{v}</div>
+                  <div style={{fontSize:10,color:"var(--muted)",letterSpacing:"0.08em",textTransform:"uppercase"}}>{l}</div>
+                </div>
+              ))}
+              <div style={{gridColumn:"1 / -1",fontSize:11,color:"var(--muted)",textAlign:"center"}}>From completed rounds across all your groups · {myStats.wins} win{myStats.wins!==1?"s":""}</div>
+            </div>
+          )}
           <div style={{width:"100%"}}>
             <div style={S.sectionLabel}>Avatar</div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8}}>
@@ -1310,6 +1439,7 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
 
 // ─── Reveal View ──────────────────────────────────────────────────────────────
 function RevealView({ round, results, subs, onRevealComplete, onHome, onLobby, requireAdmin, isAdmin }) {
+  const [shareMsg, setShareMsg] = useState("");
   const [phase,         setPhase]         = useState("fixtures");
   const finalIdx   = results.map((r,i)=>r.result!=="upcoming"?i:-1).filter(i=>i>=0);
   const finalCount = finalIdx.length;
@@ -1431,10 +1561,21 @@ function RevealView({ round, results, subs, onRevealComplete, onHome, onLobby, r
                   ))}
                 </div>
               </div>
+              {TIP_URL&&(
+                <a href={TIP_URL} target="_blank" rel="noopener noreferrer" style={{fontSize:13,color:"var(--muted)",textAlign:"center",maxWidth:320,lineHeight:1.5}}>
+                  ☕ Enjoying The Gaffer? Chuck a tip in the jar if you fancy. Totally optional.
+                </a>
+              )}
               <div style={{display:"flex",gap:10,flexWrap:"wrap",justifyContent:"center",width:"100%",maxWidth:360}}>
+                <Btn onClick={async()=>{
+                  const names=outcome.winners.map(w=>w.username).join(" & ");
+                  const r=await shareOrCopy(`🏆 ${names} got all 5 right on The Gaffer! Can you beat it?`, window.location.origin+"/");
+                  setShareMsg(r==="copied"?"Copied. Paste it into your chat.":r==="failed"?"Couldn't share.":"");
+                }} style={{flex:1}}>📣 Share result</Btn>
                 {isAdmin&&<Btn gold onClick={()=>requireAdmin("admin")} style={{flex:1}}>🔄 Start Next Round</Btn>}
                 <Btn onClick={onHome} style={{flex:1}}>← Home</Btn>
               </div>
+              {shareMsg&&<div style={{fontSize:12,color:"var(--green)"}}>{shareMsg}</div>}
             </>
           ):(
             <>
@@ -1571,6 +1712,7 @@ const S = {
   input:        { background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 13px",color:"var(--text)",fontSize:14,fontFamily:"inherit",outline:"none",width:"100%",transition:"border-color 0.2s" },
   entryRow:     { display:"flex",alignItems:"center",gap:10,background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:10,padding:"12px 14px",marginBottom:7 },
   successBanner:{ background:"rgba(52,211,153,0.08)",border:"1px solid rgba(52,211,153,0.3)",borderRadius:8,padding:"10px 14px",color:"var(--green)",fontSize:13,width:"100%",textAlign:"center" },
+  card:         { background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:12,padding:"14px 15px" },
   fixtureCard:  { background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:12,padding:"13px 15px" },
   fixtureTopRow:{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9 },
   fixtureDate:  { fontSize:11,color:"var(--muted)",letterSpacing:"0.05em" },
