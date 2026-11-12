@@ -94,5 +94,8 @@ test("countdown formatting", () => {
   assert.equal(fmtCountdown(0), "00:00:00");
   assert.equal(fmtCountdown(-5), "00:00:00");
   assert.equal(fmtCountdown(3_661_000), "01:01:01");
-  assert.equal(fmtCountdown(26 * 3_600_000), "26:00:00");
+  assert.equal(fmtCountdown(23 * 3_600_000 + 59 * 60_000 + 59_000), "23:59:59");
+  assert.equal(fmtCountdown(24 * 3_600_000), "1d 00:00:00");
+  assert.equal(fmtCountdown(26 * 3_600_000), "1d 02:00:00");
+  assert.equal(fmtCountdown((9 * 24 + 16) * 3_600_000 + 16 * 60_000 + 33_000), "9d 16:16:33");
 });
