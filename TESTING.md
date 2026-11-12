@@ -3,7 +3,8 @@
 | Suite | Command | What it covers | Needs |
 |---|---|---|---|
 | Unit | `npm run test:unit` | Scoring, void, deadlines, fixture picking, archiving, results mapping, round timing | Node 22 |
-| Database | see `tests/sql` | The server-side rules in `hardening.sql` (entry cap, lock, group size, re-pick rules) | A scratch Postgres |
+| Database | see `tests/sql` | The server-side rules in `hardening.sql`, and the sign-in lock-down in `auth/auth.sql` (who can read or write what, hidden picks, reset-request limits) | A scratch Postgres |
+| Account function | `tests/unit/auth-function.test.mjs` | Sign-up, moving old accounts across, admin-only temporary passwords, clean-up if something fails | A pretend sign-in service |
 | Browser | `npm run test:e2e` | Sign-up, groups, entries, locking, partial reveal, winners, void, admin, Story So Far, on a phone-sized screen | Playwright + Chromium |
 
 The browser tests never touch live data: `tests/e2e/fake-supabase.mjs` stands in for Supabase.
