@@ -7,6 +7,8 @@ let cfg = {};
 try { cfg = require("./config.js"); } catch (e) { /* env vars only */ }
 const SB_URL = process.env.SB_URL || cfg.SB_URL;
 const SB_KEY = process.env.SB_KEY || cfg.SB_KEY;
+// New-style secret keys (sb_secret_...) go in apikey only; older JWT keys also need the Authorization header.
+const AUTHZ = String(SB_KEY || "").startsWith("sb_") ? {} : { Authorization: `Bearer ${SB_KEY}` };
 const MAX_PER_RUN = 20;
 
 const LABELS = { bug: "bug", idea: "enhancement", other: "feedback" };
@@ -39,7 +41,7 @@ function formatIssue(row, groupName) {
 async function sb(method, path, body) {
   const res = await fetch(`${SB_URL}/rest/v1/${path}`, {
     method,
-    headers: { "Content-Type": "application/json", apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, Prefer: "return=minimal" },
+    headers: { "Content-Type": "application/json", apikey: SB_KEY, ...AUTHZ, Prefer: "return=minimal" },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) throw new Error(`Supabase ${method} ${path} -> ${res.status}: ${await res.text()}`);

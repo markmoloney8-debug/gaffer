@@ -13,6 +13,8 @@ try { cfg = require("./config.js"); } catch (e) { /* no local config: rely on en
 const FOOTBALL_DATA_TOKEN = process.env.FOOTBALL_DATA_TOKEN || cfg.FOOTBALL_DATA_TOKEN;
 const SB_URL = process.env.SB_URL || cfg.SB_URL;
 const SB_KEY = process.env.SB_KEY || cfg.SB_KEY;
+// New-style secret keys (sb_secret_...) go in apikey only; older JWT keys also need the Authorization header.
+const AUTHZ = String(SB_KEY || "").startsWith("sb_") ? {} : { Authorization: `Bearer ${SB_KEY}` };
 function requireConfig() {
   if (!FOOTBALL_DATA_TOKEN || !SB_URL || !SB_KEY) { console.error("ERROR: missing FOOTBALL_DATA_TOKEN / SB_URL / SB_KEY"); process.exit(1); }
 }
@@ -37,7 +39,7 @@ async function sb(method, path, body, prefer) {
   const res = await fetch(`${SB_URL}/rest/v1/${path}`, {
     method,
     headers: {
-      "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`,
+      "Content-Type": "application/json", "apikey": SB_KEY, ...AUTHZ,
       ...(prefer ? { "Prefer": prefer } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
