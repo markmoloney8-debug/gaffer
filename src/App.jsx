@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, createContext, useContext } from "react";
+import { emailFor } from "../supabase/functions/auth/handler.js";
 import { deadlineTs, isDeadlinePassed, msUntilDeadline, fmtCountdown, hit, isPerfect, scoreEntry } from "./logic.js";
 
 // ─── CSS ──────────────────────────────────────────────────────────────────────
@@ -120,104 +121,126 @@ function Avatar({ name, size = 28 }) {
   return <AvatarBubble emoji={p.avatar} color={p.avatar_color} initial={(name||"?")[0].toUpperCase()} size={size}/>;
 }
 
-// ─── Password hashing ─────────────────────────────────────────────────────────
-async function hashPassword(pw) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pw));
-  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+// ─── Sign-in (Supabase Auth) ──────────────────────────────────────────────────
+// The browser holds a short-lived access token; every database request is made as that player.
+const AUTH_KEY = "fp_auth";
+let onAuthLost = () => {};
+const auth = {
+  read()   { try { return JSON.parse(localStorage.getItem(AUTH_KEY) || "null"); } catch { return null; } },
+  clear()  { try { localStorage.removeItem(AUTH_KEY); } catch {} },
+  token()  { const a = this.read(); return (a && a.access_token) || null; },
+  store(d) {
+    const prev = this.read() || {};
+    const rec = { access_token: d.access_token, refresh_token: d.refresh_token, expires_at: Date.now() + (d.expires_in || 3600) * 1000,
+                  username: (d.user && d.user.user_metadata && d.user.user_metadata.username) || prev.username || null };
+    try { localStorage.setItem(AUTH_KEY, JSON.stringify(rec)); } catch {}
+    return rec;
+  },
+  async signIn(username, password) {
+    const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=password`, {
+      method: "POST", headers: { "Content-Type": "application/json", apikey: SB_KEY },
+      body: JSON.stringify({ email: emailFor(username), password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.access_token) return { ok: false, status: res.status };
+    return { ok: true, session: this.store(data) };
+  },
+  // Renew the token shortly before it runs out
+  async ensure() {
+    const a = this.read();
+    if (!a || a.expires_at - Date.now() > 60000) return;
+    if (!this._refreshing) {
+      this._refreshing = (async () => {
+        try {
+          const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
+            method: "POST", headers: { "Content-Type": "application/json", apikey: SB_KEY },
+            body: JSON.stringify({ refresh_token: a.refresh_token }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.access_token) this.store(data);
+          else if (res.status === 400 || res.status === 401 || res.status === 403) { this.clear(); onAuthLost(); }
+        } catch {}
+        this._refreshing = null;
+      })();
+    }
+    await this._refreshing;
+  },
+  async changePassword(password) {
+    await this.ensure();
+    const res = await fetch(`${SB_URL}/auth/v1/user`, {
+      method: "PUT", headers: { "Content-Type": "application/json", apikey: SB_KEY, Authorization: `Bearer ${this.token()}` },
+      body: JSON.stringify({ password }),
+    });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.msg || d.message || "failed"); }
+  },
+};
+// Calls the account function (sign-up, moving old accounts across, admin password resets)
+async function accountCall(action, body) {
+  await auth.ensure();
+  const res = await fetch(`${SB_URL}/functions/v1/auth`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: SB_KEY, Authorization: `Bearer ${auth.token() || SB_KEY}` },
+    body: JSON.stringify({ action, ...body }),
+  });
+  const json = await res.json().catch(() => ({}));
+  return { status: res.status, ok: res.ok, json };
 }
 
 // ─── Supabase client (vanilla fetch, no SDK needed) ───────────────────────────
+async function sbFetch(path, init = {}) {
+  await auth.ensure();
+  const token = auth.token();
+  const res = await fetch(`${SB_URL}/rest/v1/${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", apikey: SB_KEY, Authorization: `Bearer ${token || SB_KEY}`, ...(init.headers || {}) },
+  });
+  if (!res.ok) {
+    if (res.status === 401 && token) { auth.clear(); onAuthLost(); }
+    throw new Error(await res.text());
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+const REP = { Prefer: "return=representation" }, MIN = { Prefer: "return=minimal" };
 const sb = {
-  headers: {
-    "Content-Type":  "application/json",
-    "apikey":        SB_KEY,
-    "Authorization": `Bearer ${SB_KEY}`,
-    "Prefer":        "return=representation",
-  },
+  get:    (table, params = "")      => sbFetch(`${table}?${params}`),
+  upsert: (table, body)             => sbFetch(table, { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify(body) }),
+  insert: (table, body, minimal)    => sbFetch(table, { method: "POST", headers: minimal ? MIN : REP, body: JSON.stringify(body) }),
+  patch:  (table, params, body)     => sbFetch(`${table}?${params}`, { method: "PATCH", headers: MIN, body: JSON.stringify(body) }),
+  del:    async (table, params)     => { await sbFetch(`${table}?${params}`, { method: "DELETE", headers: MIN }); },
+  rpc:    (fn, args = {})           => sbFetch(`rpc/${fn}`, { method: "POST", body: JSON.stringify(args) }),
 
-  async get(table, params = "") {
-    const res = await fetch(`${SB_URL}/rest/v1/${table}?${params}`, { headers: this.headers });
-    if (!res.ok) throw new Error(await res.text());
-    return res.json();
-  },
-
-  async upsert(table, body) {
-    const res = await fetch(`${SB_URL}/rest/v1/${table}`, {
-      method: "POST",
-      headers: { ...this.headers, "Prefer": "resolution=merge-duplicates,return=representation" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(await res.text());
-    return res.json();
-  },
-
-  async insert(table, body) {
-    const res = await fetch(`${SB_URL}/rest/v1/${table}`, {
-      method: "POST",
-      headers: this.headers,
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(await res.text());
-    return res.json();
-  },
-
-  async patch(table, params, body) {
-    const res = await fetch(`${SB_URL}/rest/v1/${table}?${params}`, {
-      method: "PATCH",
-      headers: this.headers,
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(await res.text());
-    return res.json();
-  },
-
-  async del(table, params) {
-    const res = await fetch(`${SB_URL}/rest/v1/${table}?${params}`, {
-      method: "DELETE",
-      headers: this.headers,
-    });
-    if (!res.ok) throw new Error(await res.text());
-  },
-
-  // Realtime subscription via Supabase REST polling (simple 5s interval)
-  // Returns a cancel function
-  poll(table, params, onChange, intervalMs = 5000) {
-    let last = null;
+  // Live updates by polling every 5s. Returns a cancel function.
+  pollFn(fetcher, onChange, intervalMs = 5000) {
+    let last = null, stopped = false;
     async function check() {
       try {
-        const data = await sb.get(table, params);
+        const data = await fetcher();
+        if (stopped) return;
         const str = JSON.stringify(data);
         if (str !== last) { last = str; onChange(data); }
       } catch {}
     }
     check();
     const id = setInterval(check, intervalMs);
-    return () => clearInterval(id);
+    return () => { stopped = true; clearInterval(id); };
   },
+  poll(table, params, onChange, intervalMs) { return sb.pollFn(() => sb.get(table, params), onChange, intervalMs); },
 };
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 const db = {
   // Users
   async getUser(username) {
-    const rows = await sb.get("users", `username=eq.${encodeURIComponent(username)}`);
+    const rows = await sb.get("users", `username=eq.${encodeURIComponent(username)}&select=username`);
     return rows[0] || null;
-  },
-  async createUser(username, passwordHash, groupId) {
-    return sb.insert("users", { username, password_hash: passwordHash, group_id: groupId });
   },
 
   // Groups: each group has its own invite code, entries, history and winners
-  async getGroupByCode(code) {
-    const rows = await sb.get("groups", `invite_code=eq.${encodeURIComponent(code)}`);
-    return rows[0] || null;
-  },
   async getMemberships(username) {
     return sb.get("memberships", `username=eq.${encodeURIComponent(username)}`);
   },
-  async addMembership(username, groupId) {
-    return sb.insert("memberships", { username, group_id: groupId });
-  },
+  async joinGroup(code) { return sb.rpc("join_group", { code }); },
   async getGroupsByIds(ids) {
     if (!ids.length) return [];
     return sb.get("groups", `id=in.(${ids.join(",")})&order=created_at.asc`);
@@ -226,9 +249,10 @@ const db = {
     const rows = await sb.get("groups", `id=eq.${id}`);
     return rows[0] || null;
   },
-  async createGroup(name, code, emoji, createdBy) {
-    const rows = await sb.insert("groups", { name, invite_code: code, emoji: emoji || null, ...(createdBy ? { created_by: createdBy } : {}) });
-    await sb.insert("group_state", { group_id: rows[0].id });
+  async createOwnGroup(name, emoji) { return sb.rpc("create_group", { p_name: name, p_emoji: emoji || "" }); },
+  async createGroup(name, code, emoji) {   // admin only
+    const rows = await sb.insert("groups", { name, invite_code: code, emoji: emoji || null });
+    await sb.insert("group_state", { group_id: rows[0].id }, true);
     return rows[0];
   },
   async setGroupWinners(groupId, found) {
@@ -276,7 +300,7 @@ const db = {
   // Submissions
   async getSubs(groupId) {
     if (!groupId) return [];
-    const rows = await sb.get("submissions", `group_id=eq.${groupId}&order=submitted_at.asc`);
+    const rows = await sb.rpc("group_entries", { gid: groupId });
     return rows.map(r => ({
       id:          r.id,
       username:    r.username,
@@ -286,7 +310,7 @@ const db = {
     }));
   },
   async addSub(username, entryName, preds, groupId) {
-    return sb.insert("submissions", { username, entry_name: entryName, preds, group_id: groupId });
+    return sb.insert("submissions", { username, entry_name: entryName, preds, group_id: groupId }, true);
   },
   async updateSubPreds(id, preds) {
     return sb.patch("submissions", `id=eq.${id}`, { preds });
@@ -305,10 +329,11 @@ const db = {
 };
 
 // ─── Session (just username in localStorage — no sensitive data) ──────────────
+// The signed-in name is only trusted while a sign-in token exists too.
 const session = {
-  get: ()  => localStorage.getItem("fp_session") || null,
-  set: u   => localStorage.setItem("fp_session", u),
-  clear: () => localStorage.removeItem("fp_session"),
+  get: ()  => { try { return (auth.token() && localStorage.getItem("fp_session")) || null; } catch { return null; } },
+  set: u   => { try { localStorage.setItem("fp_session", u); } catch {} },
+  clear: () => { try { localStorage.removeItem("fp_session"); } catch {} auth.clear(); },
 };
 
 // ─── Confetti ─────────────────────────────────────────────────────────────────
@@ -365,14 +390,23 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
   const joinParam = (() => { try { return (new URLSearchParams(window.location.search).get("join") || "").toUpperCase(); } catch { return ""; } })();
   const [cpw,setCpw]=useState(""); const [inv,setInv]=useState(joinParam);
   const [err,setErr]=useState(""); const [loading,setLoading]=useState(false);
+  const [forgot,setForgot]=useState(false); const [resetNote,setResetNote]=useState(""); const [note,setNote]=useState("");
 
   async function login() {
     setErr(""); setLoading(true);
+    const name = u.trim();
+    if (!name || !pw) { setErr("Enter your username and password."); setLoading(false); return; }
     try {
-      const found = await db.getUser(u.trim());
-      if (!found) { setErr("Username not found."); setLoading(false); return; }
-      if (await hashPassword(pw) !== found.password_hash) { setErr("Incorrect password."); setLoading(false); return; }
-      session.set(found.username); onLogin(found.username);
+      let r = await auth.signIn(name, pw);
+      if (!r.ok) {
+        // Accounts from before the new sign-in are moved across the first time they sign in
+        const c = await accountCall("claim", { username: name, password: pw });
+        if (c.ok) r = await auth.signIn(name, pw);
+        else if (c.json && c.json.code === "short_password") { setErr(c.json.error); setLoading(false); return; }
+      }
+      if (!r.ok) { setErr("Wrong username or password."); setLoading(false); return; }
+      const who = r.session.username || name;
+      session.set(who); onLogin(who);
     } catch { setErr("Connection error — check your internet."); }
     setLoading(false);
   }
@@ -382,17 +416,32 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
     const trimmed=u.trim();
     if (trimmed.length<2)                        { setErr("Username must be at least 2 characters."); setLoading(false); return; }
     if (trimmed.length>20)                       { setErr("Username must be 20 characters or less."); setLoading(false); return; }
+    if (!/^[A-Za-z0-9 _.-]+$/.test(trimmed))     { setErr("Usernames can use letters, numbers, spaces, dots, dashes and underscores."); setLoading(false); return; }
     if (pw.length<6)                             { setErr("Password must be at least 6 characters."); setLoading(false); return; }
     if (pw!==cpw)                                { setErr("Passwords don't match."); setLoading(false); return; }
     try {
-      const group = await db.getGroupByCode(inv.trim().toUpperCase());
-      if (!group) { setErr("Invalid invite code."); setLoading(false); return; }
-      const existing = await db.getUser(trimmed);
-      if (existing) { setErr("Username already taken."); setLoading(false); return; }
-      await db.createUser(trimmed, await hashPassword(pw), group.id);
-      await db.addMembership(trimmed, group.id);
-      session.set(trimmed); onLogin(trimmed);
+      const r = await accountCall("register", { username: trimmed, password: pw, invite: inv.trim().toUpperCase() });
+      if (!r.ok) { setErr((r.json && r.json.error) || "Couldn't create the account. Try again."); setLoading(false); return; }
+      const si = await auth.signIn(trimmed, pw);
+      if (!si.ok) { setErr("Account created. Please sign in."); setTab("login"); setLoading(false); return; }
+      const who = si.session.username || trimmed;
+      session.set(who); onLogin(who);
     } catch { setErr("Connection error — check your internet."); }
+    setLoading(false);
+  }
+
+  async function sendResetRequest() {
+    setErr(""); setNote("");
+    const name = u.trim();
+    if (!name) { setErr("Type your username first."); return; }
+    setLoading(true);
+    try {
+      await sb.insert("reset_requests", { username: name, note: resetNote.trim().slice(0, 300) || null }, true);
+      setNote("Request sent. The admin will set you a temporary password and let you know.");
+      setResetNote("");
+    } catch (e) {
+      setErr(String(e.message || e).toLowerCase().includes("wait") ? "You've already asked recently. Give it a few minutes." : "Couldn't send the request. Try again in a minute.");
+    }
     setLoading(false);
   }
 
@@ -426,8 +475,15 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
           <Field label="Invite Code"><input style={S.input} value={inv} onChange={e=>setInv(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} placeholder="Ask the admin" autoCapitalize="characters"/></Field>
         </>}
         {err&&<ErrorBox>{err}</ErrorBox>}
+        {note&&<div role="status" style={{fontSize:13,color:"var(--green)",lineHeight:1.5}}>{note}</div>}
         {loading?<Loader msg={tab==="login"?"Signing in…":"Creating account…"}/>:
           <Btn gold onClick={go} style={{marginTop:4}}>{tab==="login"?"Sign In →":"Create Account →"}</Btn>}
+        {tab==="login"&&!forgot&&<button onClick={()=>{setForgot(true);setErr("");setNote("");}} style={{background:"none",border:"none",color:"var(--muted)",fontSize:12,textDecoration:"underline",padding:4}}>Forgot password?</button>}
+        {tab==="login"&&forgot&&<div style={{...S.card,display:"flex",flexDirection:"column",gap:8}}>
+          <div style={{fontSize:12,color:"var(--muted)",lineHeight:1.5}}>Type your username above, then send a request. The admin will set you a temporary password and tell you what it is. You can change it once you're in.</div>
+          <Field label="Message for the admin (optional)"><input style={S.input} value={resetNote} onChange={e=>setResetNote(e.target.value)} maxLength={300} placeholder="e.g. I'm Dave, Pete's mate from the pub league"/></Field>
+          <Btn onClick={sendResetRequest} disabled={loading}>Send reset request</Btn>
+        </div>}
       </div>
     </Screen>
   );
@@ -466,6 +522,10 @@ export default function App() {
   const [fbText,     setFbText]     = useState("");
   const [fbNote,     setFbNote]     = useState("");
   const [feedbackList, setFeedbackList] = useState([]);
+  const [resets,     setResets]     = useState([]);
+  const [tempPw,     setTempPw]     = useState(null);   // { username, tempPassword } shown once to the admin
+  const [newPw,      setNewPw]      = useState("");
+  const [pwNote,     setPwNote]     = useState("");
   const [groups,    setGroups]    = useState([]);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupCode, setNewGroupCode] = useState("");
@@ -508,6 +568,7 @@ export default function App() {
     } catch {}
   }, [username, appReady]);
   const toggleTheme = () => setTheme(t => t === "dark" ? "light" : "dark");
+  useEffect(() => { onAuthLost = () => { session.clear(); setUsername(null); setIsAdmin(false); setView("home"); }; return () => { onAuthLost = () => {}; }; }, []);
 
   // ── Player avatars ────────────────────────────────────────────────────────
   async function loadProfiles() {
@@ -536,8 +597,7 @@ export default function App() {
     if (name.length < 2) { setJoinErr("Give your group a name (2+ characters)."); return; }
     setJoinErr(""); setLoading(true); setLoadMsg("Creating group…");
     try {
-      const g = await db.createGroup(name, randomCode(), "", username);
-      await db.addMembership(username, g.id);
+      const g = await db.createOwnGroup(name, "");
       setMyGroups(gs => [...gs, g]); setOwnGroupName("");
       await switchGroup(g.id);
       setShareNote("Group created! Share the invite from the Join screen.");
@@ -559,7 +619,7 @@ export default function App() {
     if (!message) return;
     setLoading(true); setLoadMsg("Sending…"); setFbNote(""); setError("");
     try {
-      await sb.insert("feedback", { username, group_id: groupId, category: fbCategory, message });
+      await sb.insert("feedback", { username, group_id: groupId, category: fbCategory, message }, true);
       setFbText(""); setFbNote("Thanks! Your feedback has been sent.");
     } catch (e) {
       setError(String(e.message||e).includes("wait") ? "Please wait a couple of minutes before sending another message." : "Couldn't send your feedback. Try again.");
@@ -568,6 +628,27 @@ export default function App() {
   }
   async function loadFeedback() {
     try { setFeedbackList(await sb.get("feedback", "order=created_at.desc&limit=30")); } catch { setFeedbackList([]); }
+  }
+  async function loadResets() {
+    try { setResets(await sb.get("reset_requests", "status=eq.new&order=created_at.asc")); } catch { setResets([]); }
+  }
+  async function resetPlayerPassword(row) {
+    setError(""); setTempPw(null);
+    try {
+      const r = await accountCall("reset_password", { username: row.username, request_id: row.id });
+      if (!r.ok) { setError((r.json && r.json.error) || "Couldn't reset that password."); return; }
+      setTempPw({ username: r.json.username, tempPassword: r.json.tempPassword });
+      await loadResets();
+    } catch { setError("Couldn't reset that password."); }
+  }
+  async function dismissReset(id) {
+    try { await sb.patch("reset_requests", `id=eq.${id}`, { status: "dismissed" }); await loadResets(); } catch { setError("Couldn't update that request."); }
+  }
+  async function saveNewPassword() {
+    setPwNote(""); setError("");
+    if (newPw.length < 6) { setError("Password must be at least 6 characters."); return; }
+    try { await auth.changePassword(newPw); setNewPw(""); setPwNote("Password changed."); }
+    catch { setError("Couldn't change your password. Try a longer or less common one."); }
   }
   async function setFeedbackStatus(id, status) {
     try {
@@ -592,7 +673,6 @@ export default function App() {
         const u = await db.getUser(username);
         if (!u) { session.clear(); setUsername(null); setAppReady(true); return; }
         let ids = (await db.getMemberships(username)).map(m => m.group_id);
-        if (!ids.length && u.group_id) ids = [u.group_id];
         const gs = await db.getGroupsByIds(ids);
         setMyGroups(gs);
         let stored = null;
@@ -627,16 +707,12 @@ export default function App() {
     if (!code) return;
     setJoinErr(""); setLoading(true); setLoadMsg("Joining…");
     try {
-      const g = await db.getGroupByCode(code);
-      if (!g) { setJoinErr("Invalid invite code."); setLoading(false); return; }
-      if (!myGroups.some(x => x.id === g.id)) {
-        await db.addMembership(username, g.id);
-        setMyGroups(gs => [...gs, g]);
-      }
+      const g = await db.joinGroup(code);
+      if (!myGroups.some(x => x.id === g.id)) setMyGroups(gs => [...gs, g]);
       setJoinCode("");
       if (g.id === groupId) { setView("home"); setLoading(false); return; }
       await switchGroup(g.id);
-    } catch { setJoinErr("Couldn't join. Try again."); setLoading(false); }
+    } catch (e) { setJoinErr(String(e.message || e).includes("Invalid invite") ? "Invalid invite code." : "Couldn't join. Try again."); setLoading(false); }
   }
 
   async function loadGroups() {
@@ -670,9 +746,7 @@ export default function App() {
     const refreshRound = async () => { setRound(await db.getRound(groupId)); };
     const cancelRound = sb.poll("round", "", refreshRound);
     const cancelState = sb.poll("group_state", `group_id=eq.${groupId}`, refreshRound);
-    const cancelSubs = sb.poll("submissions", `group_id=eq.${groupId}&order=submitted_at.asc`, async () => {
-      setSubs(await db.getSubs(groupId));
-    });
+    const cancelSubs = sb.pollFn(() => db.getSubs(groupId), setSubs);
     return () => { cancelRound(); cancelState(); cancelSubs(); };
   }, [appReady, groupId]);
 
@@ -709,7 +783,7 @@ export default function App() {
   function executeAdmin(t) {
     if (t==="reset")   { doReset(); }
     if (t==="newweek") { doNewWeek(); }
-    if (t==="admin")   { loadGroups(); loadFeedback(); setView("admin"); }
+    if (t==="admin")   { loadGroups(); loadFeedback(); loadResets(); setView("admin"); }
   }
 
   // ── Submit an entry ───────────────────────────────────────────────────────
@@ -970,6 +1044,29 @@ export default function App() {
               <input style={S.input} placeholder="Invite code (e.g. GAFFERMATES26)" value={newGroupCode} onChange={e=>setNewGroupCode(e.target.value.toUpperCase())} maxLength={24} autoCapitalize="characters"/>
               <Btn onClick={addGroup} disabled={loading}>+ Add group</Btn>
             </div>
+          </div>
+
+          {/* Password resets */}
+          <div style={{width:"100%",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:12,padding:"16px"}} aria-label="Password resets">
+            <div style={S.sectionLabel}>Password resets ({resets.length} waiting)</div>
+            {tempPw&&<div role="status" style={{padding:"10px 12px",marginBottom:8,borderRadius:8,border:"1px solid var(--gold)",fontSize:13,lineHeight:1.5}}>
+              Temporary password for <b>{tempPw.username}</b>: <span style={{fontFamily:"monospace",fontSize:16,letterSpacing:1}}>{tempPw.tempPassword}</span><br/>
+              <span style={{color:"var(--muted)",fontSize:12}}>Send it to them privately. It is only shown now. They can change it on their profile.</span>
+            </div>}
+            {resets.length===0&&<div style={{fontSize:13,color:"var(--muted)"}}>Nobody is waiting.</div>}
+            {resets.map(r=>(
+              <div key={r.id} style={{padding:"10px 0",borderTop:"1px solid var(--border)"}}>
+                <div style={{display:"flex",gap:8,fontSize:13,alignItems:"baseline"}}>
+                  <b>{r.username}</b>
+                  <span style={{marginLeft:"auto",fontSize:11,color:"var(--muted)"}}>{r.created_at?new Date(r.created_at).toLocaleDateString("en-GB",{day:"numeric",month:"short"}):""}</span>
+                </div>
+                {r.note&&<div style={{fontSize:12,color:"var(--muted)",margin:"2px 0 6px",wordBreak:"break-word"}}>{r.note}</div>}
+                <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                  <Btn onClick={()=>resetPlayerPassword(r)}>Set temporary password</Btn>
+                  <button style={S.dangerLink} onClick={()=>dismissReset(r.id)}>Dismiss</button>
+                </div>
+              </div>
+            ))}
           </div>
 
           {/* Feedback */}
@@ -1290,6 +1387,14 @@ export default function App() {
               ))}
             </div>
           </div>
+          <div style={{width:"100%"}}>
+            <div style={S.sectionLabel}>Change password</div>
+            <div style={{display:"flex",gap:8}}>
+              <input style={S.input} type="password" autoComplete="new-password" aria-label="New password" placeholder="New password" value={newPw} onChange={e=>{setNewPw(e.target.value);setPwNote("");}}/>
+              <Btn onClick={saveNewPassword} disabled={!newPw}>Change</Btn>
+            </div>
+            {pwNote&&<div role="status" style={{fontSize:12,color:"var(--green)",marginTop:6}}>{pwNote}</div>}
+          </div>
           {error&&<ErrorBox>{error}</ErrorBox>}
           {loading?<Loader msg={loadMsg}/>:<Btn gold onClick={saveProfile}>Save profile</Btn>}
         </Screen>
@@ -1342,6 +1447,7 @@ export default function App() {
 // The game runs round after round until somebody gets all 5 right. This shows how many
 // entries each player has used in the current run, and the scores of every entry.
 function StoryView({ history, round, subs, series, setSeries, onBack }) {
+  const [sort, setSort] = useState({ key:"default", dir:"desc" });
   const current = round ? (round.series||1) : 1;
   const allSeries = [...new Set([current, ...history.map(h=>h.series)])].sort((a,b)=>b-a);
   const sel = series ?? current;
@@ -1364,7 +1470,7 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
     });
     if (!weeks.includes(round.week)) weeks.push(round.week);
   }
-  weeks = weeks.sort((a,b)=>a-b);
+  weeks = weeks.sort((a,b)=>b-a);   // newest week first
 
   const players = [...new Set(rows.map(r=>r.username))].map(u=>{
     const mine = rows.filter(r=>r.username===u);
@@ -1376,9 +1482,27 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
       best: scored.length ? Math.max(...scored.map(r=>r.correct)) : null,
       won: mine.some(r=>r.perfect) };
   }).sort((a,b)=>(b.won-a.won)||((b.best??-1)-(a.best??-1))||(b.entries-a.entries));
+  const cell = {padding:"8px 6px",fontSize:13,borderBottom:"1px solid var(--border)"};
+  // Tap a column heading to sort by it; tap again to flip. Players with no score yet always sit at the bottom.
+  const SORTS = { player:p=>p.username.toLowerCase(), entries:p=>p.entries, best:p=>p.best, acc:p=>p.acc };
+  if (SORTS[sort.key]) {
+    const val = SORTS[sort.key], dir = sort.dir==="asc" ? 1 : -1;
+    players.sort((a,b)=>{
+      const x=val(a), y=val(b);
+      if (x==null && y==null) return a.username.localeCompare(b.username);
+      if (x==null) return 1; if (y==null) return -1;
+      return (x<y?-1:x>y?1:0)*dir || a.username.localeCompare(b.username);
+    });
+  }
+  const sortBy = key => setSort(c => c.key===key ? { key, dir:c.dir==="asc"?"desc":"asc" } : { key, dir:key==="player"?"asc":"desc" });
+  const sortTh = (key,label) => (
+    <th style={cell} aria-sort={sort.key===key?(sort.dir==="asc"?"ascending":"descending"):"none"}>
+      <button onClick={()=>sortBy(key)} aria-label={`Sort by ${label}`} style={{background:"none",border:"none",color:"inherit",font:"inherit",textTransform:"inherit",letterSpacing:"inherit",padding:0,cursor:"pointer"}}>
+        {label}{sort.key===key?(sort.dir==="asc"?" ▲":" ▼"):""}
+      </button>
+    </th>);
   const winners = players.filter(p=>p.won);
 
-  const cell = {padding:"8px 6px",fontSize:13,borderBottom:"1px solid var(--border)"};
   return (
     <Screen wide>
       <BackBtn onClick={onBack}/>
@@ -1404,7 +1528,7 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
             <div style={S.sectionLabel}>Entries used</div>
             <table style={{width:"100%",borderCollapse:"collapse"}}>
               <thead><tr style={{textAlign:"left",color:"var(--muted)",fontSize:11,textTransform:"uppercase",letterSpacing:"0.06em"}}>
-                <th style={cell}>Player</th><th style={cell}>Entries</th><th style={cell}>Best</th><th style={cell}>Accuracy</th>
+                {sortTh("player","Player")}{sortTh("entries","Entries")}{sortTh("best","Best")}{sortTh("acc","Accuracy")}
               </tr></thead>
               <tbody>{players.map(p=>(
                 <tr key={p.username}>
@@ -1416,9 +1540,9 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
             </table>
           </div>
 
-          {weeks.map(w=>(
-            <div key={w} style={{width:"100%"}}>
-              <div style={S.sectionLabel}>Week {w}{sel===current&&round&&w===round.week&&!round.winnersFound?" (in play)":""}</div>
+          {weeks.map((w,wi)=>(
+            <details key={`${sel}-${w}`} open={wi===0} style={{width:"100%"}}>
+              <summary style={{...S.sectionLabel,cursor:"pointer",listStyle:"revert"}}>Week {w}{sel===current&&round&&w===round.week&&!round.winnersFound?" (in play)":""}</summary>
               <table style={{width:"100%",borderCollapse:"collapse"}}>
                 <tbody>{rows.filter(r=>r.week===w)
                   .sort((a,b)=>(b.correct-a.correct)||a.username.localeCompare(b.username))
@@ -1430,7 +1554,7 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
                     </td>
                   </tr>))}</tbody>
               </table>
-            </div>
+            </details>
           ))}
         </>}
     </Screen>
