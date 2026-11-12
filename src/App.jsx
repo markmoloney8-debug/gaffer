@@ -9,7 +9,7 @@ const css = `
   body { background: var(--bg); }
   :root {
     --gold: #f0c040; --ink: #05080f; --surface: #0c1018; --surface2: #131822;
-    --border: rgba(255,255,255,0.07); --muted: #4a5568; --text: #e2e8f0;
+    --border: rgba(255,255,255,0.07); --muted: #8b97ab; --text: #e2e8f0;
     --green: #34d399; --red: #f87171;
     --bg: #05080f; --navbg: rgba(5,8,15,0.92); --scrim: rgba(5,8,15,0.88);
     --g1: #f0c040; --g2: #f5d780; --g3: #c8960c; --danger-text: #fca5a5;
@@ -18,9 +18,9 @@ const css = `
   :root[data-theme="light"] {
     --bg: #f5f3ee; --ink: #ffffff; --surface: #efece4; --surface2: #ffffff;
     --border: rgba(15,23,42,0.13); --muted: #5b6574; --text: #1a202c;
-    --gold: #a87400; --green: #047857; --red: #b91c1c;
+    --gold: #8a5e00; --green: #047857; --red: #b91c1c;
     --navbg: rgba(245,243,238,0.92); --scrim: rgba(245,243,238,0.9);
-    --g1: #a87400; --g2: #c58f10; --g3: #7a5400; --danger-text: #b91c1c;
+    --g1: #8a5e00; --g2: #a87400; --g3: #6b4800; --danger-text: #b91c1c;
     color-scheme: light;
   }
   @keyframes spin         { to { transform: rotate(360deg); } }
@@ -86,6 +86,8 @@ const OUTCOMES = [
 const AVATAR_EMOJIS = ["⚽","🏆","🥅","🧤","👟","⛳","🎯","🥊","🧢","🎩","🕶️","👑","🦁","🐺","🦅","🦈","🐂","🔥","⚡","🏎️","🎸","🍺","🥃","☕"];
 const AVATAR_COLORS = ["#f0c040","#34d399","#60a5fa","#a78bfa","#f472b6","#fb923c","#f87171","#94a3b8"];
 const GROUP_EMOJIS  = ["","⚽","🏆","🔥","🍺","🦁","🐯","🚀","🎯","👑","🍀","⭐","🧠","🎩"];
+// Each group gets its own colour so it's obvious at a glance which one you're playing in.
+const groupHue = id => { let h = 0; for (const c of String(id || "")) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
 const gLabel = g => g ? `${g.emoji ? g.emoji + " " : ""}${g.name}` : "";
 const ProfilesCtx = createContext({});
 
@@ -383,6 +385,46 @@ function PinModal({ onSuccess, onCancel }) {
   );
 }
 
+// ─── How to play + FAQ ────────────────────────────────────────────────────────
+const HOW_TO_PLAY = [
+  "Each week you pick home, draw or away for 5 Premier League fixtures.",
+  `You can make up to ${MAX_ENTRIES} entries a week. Each one is a separate set of picks.`,
+  "Entries lock 1 minute before the first kick-off. Until then, nobody can see anyone else's picks.",
+  "Get all 5 right and you win. If more than one person does, you share it.",
+  "If nobody gets all 5, the run carries on to next week and everyone's entries keep adding up on The Story So Far.",
+];
+const FAQ = [
+  ["What does it cost?", "Nothing. It's a game between friends. If you enjoy it, there's a tip link on the results screen."],
+  ["Can I change an entry once I've made it?", "No. Entries are sealed when you submit them, so check your picks first. You can use another entry for a different set of picks."],
+  ["What if a match is postponed?", "The admin either voids it, which counts it as correct for everyone, or swaps in a replacement. If it's replaced, you re-pick just that match from the Lobby."],
+  ["Why can't I see everyone else's picks?", "They stay hidden until entries lock, so nobody can copy. After the lock, picks are revealed in stages."],
+  ["Who wins?", "Anyone who gets all 5 right in a week. Nobody gets 5? The run carries on and the entries keep adding up."],
+  ["How do I invite friends or start my own group?", "Tap My Groups on the home screen. There you can share an invite link for your group, or create a new group of your own (up to 3)."],
+  ["I forgot my password.", "On the sign-in page tap Forgot password?, type your username and send the request. The admin will set you a temporary password. You can change it on your profile."],
+  ["Which games count?", "Five Premier League fixtures each week, chosen by the admin. Results are collected automatically."],
+];
+function HelpContent() {
+  return (
+    <div style={{width:"100%",maxWidth:520,display:"flex",flexDirection:"column",gap:14,textAlign:"left"}}>
+      <div style={{...S.card}}>
+        <div style={S.sectionLabel}>How to play</div>
+        <ol style={{margin:"6px 0 0",paddingLeft:20,fontSize:14,lineHeight:1.6}}>
+          {HOW_TO_PLAY.map((t,i)=><li key={i} style={{marginBottom:6}}>{t}</li>)}
+        </ol>
+      </div>
+      <div style={{...S.card}}>
+        <div style={S.sectionLabel}>Questions</div>
+        {FAQ.map(([q,a])=>(
+          <details key={q} style={{borderTop:"1px solid var(--border)",padding:"8px 0"}}>
+            <summary style={{cursor:"pointer",fontSize:14,fontWeight:600}}>{q}</summary>
+            <div style={{fontSize:13,color:"var(--muted)",lineHeight:1.6,marginTop:6}}>{a}</div>
+          </details>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Auth Screen ──────────────────────────────────────────────────────────────
 function AuthScreen({ onLogin, theme, toggleTheme }) {
   const [tab,setTab]=useState(() => { try { return new URLSearchParams(window.location.search).get("join") ? "register" : "login"; } catch { return "login"; } });
@@ -390,6 +432,7 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
   const joinParam = (() => { try { return (new URLSearchParams(window.location.search).get("join") || "").toUpperCase(); } catch { return ""; } })();
   const [cpw,setCpw]=useState(""); const [inv,setInv]=useState(joinParam);
   const [err,setErr]=useState(""); const [loading,setLoading]=useState(false);
+  const [showHelp,setShowHelp]=useState(false);
   const [forgot,setForgot]=useState(false); const [resetNote,setResetNote]=useState(""); const [note,setNote]=useState("");
 
   async function login() {
@@ -478,6 +521,7 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
         {note&&<div role="status" style={{fontSize:13,color:"var(--green)",lineHeight:1.5}}>{note}</div>}
         {loading?<Loader msg={tab==="login"?"Signing in…":"Creating account…"}/>:
           <Btn gold onClick={go} style={{marginTop:4}}>{tab==="login"?"Sign In →":"Create Account →"}</Btn>}
+        <button onClick={()=>setShowHelp(h=>!h)} aria-expanded={showHelp} style={{background:"none",border:"none",color:"var(--muted)",fontSize:12,textDecoration:"underline",padding:4}}>{showHelp?"Hide help":"How does this work?"}</button>
         {tab==="login"&&!forgot&&<button onClick={()=>{setForgot(true);setErr("");setNote("");}} style={{background:"none",border:"none",color:"var(--muted)",fontSize:12,textDecoration:"underline",padding:4}}>Forgot password?</button>}
         {tab==="login"&&forgot&&<div style={{...S.card,display:"flex",flexDirection:"column",gap:8}}>
           <div style={{fontSize:12,color:"var(--muted)",lineHeight:1.5}}>Type your username above, then send a request. The admin will set you a temporary password and tell you what it is. You can change it once you're in.</div>
@@ -485,6 +529,7 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
           <Btn onClick={sendResetRequest} disabled={loading}>Send reset request</Btn>
         </div>}
       </div>
+      {showHelp&&<HelpContent/>}
     </Screen>
   );
 }
@@ -773,6 +818,8 @@ export default function App() {
   const deadlineLocked = round ? isDeadlinePassed(round.fixtures) : false;
   const canAddEntry    = myEntries.length < MAX_ENTRIES && !deadlineLocked;
   const allPicked      = Object.keys(preds).length === 5;
+  // An entry with exactly the same picks as one you already made in this group is refused.
+  const duplicateOf    = allPicked ? myEntries.find(e=>[0,1,2,3,4].every(i=>e.preds&&e.preds[i]===preds[i])) : null;
 
   // ── Admin gate ────────────────────────────────────────────────────────────
   function requireAdmin(target) {
@@ -789,6 +836,8 @@ export default function App() {
   // ── Submit an entry ───────────────────────────────────────────────────────
   async function submitEntry() {
     if (!allPicked||!canAddEntry||round?.locked||deadlineLocked) return;
+    if (duplicateOf) { setError(`Those picks are exactly the same as ${duplicateOf.entryName}. Change at least one pick.`); return; }
+    setError("");
     setLoading(true); setLoadMsg("Sealing entry…");
     try {
       await db.addSub(username, `Entry ${myEntries.length+1}`, preds, groupId);   // auto-named, no typing needed
@@ -916,7 +965,7 @@ export default function App() {
           <span style={{fontSize:13,color:"var(--muted)",maxWidth:110,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{username}{myGroups.length===1&&groupName?` · ${groupName}`:""}</span>
           {myGroups.length>1&&(
             <select value={groupId||""} onChange={e=>switchGroup(e.target.value)}
-              style={{...S.input,width:"auto",maxWidth:130,padding:"4px 8px",fontSize:12}}>
+              style={{...S.input,width:"auto",maxWidth:130,padding:"4px 8px",fontSize:12,border:`2px solid hsl(${groupHue(groupId)} 65% 52%)`}}>
               {myGroups.map(g=><option key={g.id} value={g.id}>{gLabel(g)}</option>)}
             </select>
           )}
@@ -924,6 +973,20 @@ export default function App() {
           <button style={S.navBtn} onClick={signOut}>Sign out</button>
         </div>
       </div>
+
+      {/* Which group am I in? Shown when you belong to more than one. */}
+      {myGroups.length>1&&groupId&&["home","submit","lobby","story","reveal"].includes(view)&&(()=>{
+        const h = groupHue(groupId);
+        return (
+          <div role="status" aria-label={`Playing in ${groupName}`} style={{display:"flex",justifyContent:"center",padding:"10px 16px 0"}}>
+            <div style={{display:"inline-flex",alignItems:"center",gap:8,padding:"6px 16px",borderRadius:999,fontSize:14,fontWeight:700,
+              border:`2px solid hsl(${h} 65% 52%)`,background:`hsl(${h} 65% 52% / 0.16)`,color:"var(--text)",maxWidth:"100%"}}>
+              <span style={{fontSize:11,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",color:"var(--muted)"}}>Playing in</span>
+              <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{groupName}</span>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── HOME ── */}
       {view==="home"&&(
@@ -939,8 +1002,9 @@ export default function App() {
             </Btn>
             <Btn onClick={()=>setView("lobby")} disabled={!round}>👥 Lobby</Btn>
             <Btn onClick={openStory}>📊 The Story So Far</Btn>
-            <Btn onClick={()=>{setJoinErr("");setJoinCode("");setView("join");}}>➕ Join another group</Btn>
+            <Btn onClick={()=>{setJoinErr("");setJoinCode("");setView("join");}}>👥 My Groups</Btn>
             <Btn onClick={openProfile}>🙂 My Profile</Btn>
+            <Btn onClick={()=>setView("help")}>❓ How to play</Btn>
             <Btn onClick={()=>{setFbNote("");setError("");setView("feedback");}}>💬 Send feedback</Btn>
           </div>
           {round?(
@@ -1207,8 +1271,9 @@ export default function App() {
               <span style={{fontSize:11,color:"var(--muted)"}}>Sealed on submit</span>
             </div>
           </div>
+          {duplicateOf&&<div role="alert" style={{fontSize:13,color:"var(--gold)",textAlign:"center",lineHeight:1.5}}>⚠️ These picks are exactly the same as {duplicateOf.entryName}. Change at least one pick to seal this entry.</div>}
           {loading?<Loader msg={loadMsg}/>:
-            <Btn gold onClick={submitEntry} disabled={!allPicked}>🔒 Seal This Entry</Btn>}
+            <Btn gold onClick={submitEntry} disabled={!allPicked||!!duplicateOf}>🔒 Seal This Entry</Btn>}
         </Screen>
       )}
 
@@ -1321,8 +1386,8 @@ export default function App() {
       {view==="join"&&(
         <Screen>
           <BackBtn onClick={()=>setView("home")}/>
-          <SectionTitle eyebrow="Groups" title="Join Another Group"
-            sub="Enter an invite code to join another group. Each group has its own entries and winners."/>
+          <SectionTitle eyebrow="Groups" title="My Groups"
+            sub="Join a group with an invite code, invite your friends, or start a group of your own. Each group has its own entries and winners."/>
           <Field label="Invite Code">
             <input style={S.input} value={joinCode} onChange={e=>setJoinCode(e.target.value)}
               onKeyDown={e=>e.key==="Enter"&&joinGroup()} placeholder="e.g. GAFFERMATES26" autoCapitalize="characters" autoFocus/>
@@ -1424,6 +1489,14 @@ export default function App() {
       )}
 
       {/* ── STORY SO FAR ── */}
+      {view==="help"&&(
+        <Screen>
+          <BackBtn onClick={()=>setView("home")}/>
+          <SectionTitle eyebrow="The Gaffer" title="How to play"/>
+          <HelpContent/>
+        </Screen>
+      )}
+
       {view==="story"&&(
         <StoryView history={history} round={round} subs={subs}
           series={storySeries} setSeries={setStorySeries} onBack={()=>setView("home")}/>
@@ -1448,6 +1521,7 @@ export default function App() {
 // entries each player has used in the current run, and the scores of every entry.
 function StoryView({ history, round, subs, series, setSeries, onBack }) {
   const [sort, setSort] = useState({ key:"default", dir:"desc" });
+  const [sortAll, setSortAll] = useState({ key:"wins", dir:"desc" });
   const current = round ? (round.series||1) : 1;
   const allSeries = [...new Set([current, ...history.map(h=>h.series)])].sort((a,b)=>b-a);
   const sel = series ?? current;
@@ -1503,6 +1577,34 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
     </th>);
   const winners = players.filter(p=>p.won);
 
+  // All-time record across every run: how often each player has won, and how many entries it took them.
+  const allRows = history.map(h=>({ key:`${h.series}|${h.week}`, username:h.username, perfect:!!h.perfect }));
+  if (round && !history.some(h=>h.series===current && h.week===round.week)) {
+    const res = round.mockResults || round.results;
+    const done = round.winnersFound && Array.isArray(res);
+    subs.forEach(x=>allRows.push({ key:`${current}|${round.week}`, username:x.username, perfect:done&&isPerfect(x,res) }));
+  }
+  const record = [...new Set(allRows.map(r=>r.username))].map(u=>{
+    const mine = allRows.filter(r=>r.username===u);
+    const wins = new Set(mine.filter(r=>r.perfect).map(r=>r.key)).size;   // a win is a week with at least one perfect entry
+    return { username:u, wins, entries:mine.length, perWin: wins ? Math.round((mine.length/wins)*10)/10 : null };
+  });
+  const ALL = { player:p=>p.username.toLowerCase(), wins:p=>p.wins, entries:p=>p.entries, perWin:p=>p.perWin };
+  { const val = ALL[sortAll.key], dir = sortAll.dir==="asc" ? 1 : -1;
+    record.sort((a,b)=>{
+      const x=val(a), y=val(b);
+      if (x==null && y==null) return b.entries-a.entries || a.username.localeCompare(b.username);
+      if (x==null) return 1; if (y==null) return -1;
+      return (x<y?-1:x>y?1:0)*dir || b.entries-a.entries || a.username.localeCompare(b.username);
+    }); }
+  const sortAllBy = key => setSortAll(c => c.key===key ? { key, dir:c.dir==="asc"?"desc":"asc" } : { key, dir:key==="player"||key==="perWin"?"asc":"desc" });
+  const allTh = (key,label) => (
+    <th style={cell} aria-sort={sortAll.key===key?(sortAll.dir==="asc"?"ascending":"descending"):"none"}>
+      <button onClick={()=>sortAllBy(key)} aria-label={`Sort record by ${label}`} style={{background:"none",border:"none",color:"inherit",font:"inherit",textTransform:"inherit",letterSpacing:"inherit",padding:0,cursor:"pointer"}}>
+        {label}{sortAll.key===key?(sortAll.dir==="asc"?" ▲":" ▼"):""}
+      </button>
+    </th>);
+
   return (
     <Screen wide>
       <BackBtn onClick={onBack}/>
@@ -1524,6 +1626,23 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
       {players.length===0
         ? <div style={{color:"var(--muted)",fontSize:13,textAlign:"center",padding:"16px 0"}}>Nothing here yet.</div>
         : <>
+          <div style={{width:"100%"}} aria-label="All-time record">
+            <div style={S.sectionLabel}>All-time record</div>
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <thead><tr style={{textAlign:"left",color:"var(--muted)",fontSize:11,textTransform:"uppercase",letterSpacing:"0.06em"}}>
+                {allTh("player","Player")}{allTh("wins","Wins")}{allTh("entries","Entries")}{allTh("perWin","Entries per win")}
+              </tr></thead>
+              <tbody>{record.map(p=>(
+                <tr key={p.username}>
+                  <td style={cell}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Avatar name={p.username} size={20}/>{p.username}</span></td>
+                  <td style={cell}>{p.wins}</td>
+                  <td style={cell}>{p.entries}</td>
+                  <td style={cell}>{p.perWin===null?"-":p.perWin}</td>
+                </tr>))}</tbody>
+            </table>
+            <div style={{fontSize:11,color:"var(--muted)",marginTop:6}}>Across every run. A win is a week with a perfect 5. Shared wins count for everyone who got it. Entries include this week's.</div>
+          </div>
+
           <div style={{width:"100%"}}>
             <div style={S.sectionLabel}>Entries used</div>
             <table style={{width:"100%",borderCollapse:"collapse"}}>
@@ -1601,7 +1720,7 @@ function RevealView({ round, results, subs, onRevealComplete, onHome, onLobby, r
               return (
                 <div key={i} style={{...S.revealCard,
                   animation:shown?"revealCard 0.45s ease both":"",
-                  opacity:shown?1:(isFinal?0.15:0.55),filter:(isFinal&&!shown)?"blur(2px)":"none",
+                  opacity:shown?1:(isFinal?0.15:1),filter:(isFinal&&!shown)?"blur(2px)":"none",
                   transition:"opacity 0.3s,filter 0.3s",
                   borderColor:shown?"rgba(240,192,64,0.3)":"var(--border)",
                 }}>
@@ -1632,7 +1751,7 @@ function RevealView({ round, results, subs, onRevealComplete, onHome, onLobby, r
                               border:`1px solid ${got?"rgba(52,211,153,0.35)":"rgba(255,255,255,0.07)"}`}}>
                               <span style={{fontSize:11}}>{got?"✅":"❌"}</span>
                               <span style={{fontSize:11,color:got?"var(--green)":"var(--muted)",fontWeight:got?600:400}}>
-                                {s.username} <span style={{opacity:0.55}}>({s.entryName})</span>
+                                {s.username} <span style={{color:"var(--muted)"}}>({s.entryName})</span>
                               </span>
                             </div>
                           );
@@ -1818,7 +1937,7 @@ const S = {
   bigTitle:     { fontFamily:"'Bebas Neue',sans-serif",fontSize:52,letterSpacing:"0.15em",lineHeight:1,background:"linear-gradient(135deg,var(--g1),var(--g2),var(--g3))",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" },
   bigSub:       { fontSize:12,color:"var(--muted)",letterSpacing:"0.15em",textTransform:"uppercase",marginTop:5 },
   pill:         { marginTop:4,fontSize:13,textAlign:"center",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,padding:"7px 14px" },
-  adminLink:    { background:"none",border:"none",color:"var(--muted)",fontSize:12,cursor:"pointer",marginTop:6,opacity:0.45 },
+  adminLink:    { background:"none",border:"none",color:"var(--muted)",fontSize:12,cursor:"pointer",marginTop:6 },
   btn:          { width:"100%",padding:"12px 20px",borderRadius:10,fontSize:14,fontWeight:600,border:"none",transition:"all 0.18s",letterSpacing:"0.02em" },
   btnGold:      { background:"var(--gold)",color:"var(--ink)" },
   btnGhost:     { background:"var(--surface2)",color:"var(--text)",border:"1px solid var(--border)" },
