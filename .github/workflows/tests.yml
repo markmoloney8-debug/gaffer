@@ -32,8 +32,13 @@ jobs:
       - run: |
           for f in tests/sql/baseline.sql history-setup.sql hardening.sql; do $PSQL -d gaffer_test -f $f; done
       - run: $PSQL -d gaffer_test -f tests/sql/hardening.test.sql
+      - name: Sign-in lock-down and its rules
+        run: |
+          $PSQL -d gaffer_test -f tests/sql/auth-stub.sql
+          $PSQL -d gaffer_test -f auth/auth.sql
+          $PSQL -d gaffer_test -f tests/sql/auth.test.sql
       - name: Setup scripts are safe to run twice
-        run: for f in history-setup.sql hardening.sql; do $PSQL -d gaffer_test -f $f; done
+        run: for f in history-setup.sql hardening.sql auth/auth.sql; do $PSQL -d gaffer_test -f $f; done
 
   browser:
     runs-on: ubuntu-latest

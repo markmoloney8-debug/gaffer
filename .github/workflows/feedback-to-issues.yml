@@ -25,5 +25,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SB_URL: https://oszrnwhyvmvccxxepsnm.supabase.co
-          SB_KEY: sb_publishable_V9itVh6Qu_ThqCfAEV5SBA_PagJsoG4
+          SB_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: node scripts/feedback-to-issues.js
