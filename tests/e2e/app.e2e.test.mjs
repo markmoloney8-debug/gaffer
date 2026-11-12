@@ -67,7 +67,8 @@ test("making entries: no name to type, auto-named, capped at five", async () => 
     for (let n = 1; n <= 5; n++) {
       await w.click(/Add Entry/);
       assert.equal(await w.page.getByText("Entry Name").count(), 0, "there should be no entry-name box");
-      await sealEntry(w, "home", "draw", "away", "home", "home");
+      const [a4, a5] = [["home", "home"], ["home", "draw"], ["home", "away"], ["draw", "home"], ["draw", "draw"]][n - 1];            // each entry differs, since identical ones are refused
+      await sealEntry(w, "home", "draw", "away", a4, a5);
       await w.text("Entry sealed");
       await w.text(`Entry ${n}`);
     }
@@ -121,7 +122,7 @@ test("a player can join a second group, switch between them, and entries stay se
     assert.equal(await w.page.locator("select").count(), 0, "no switcher with a single group");
     await w.text("ann · Alpha");
 
-    await w.click(/Join another group/);
+    await w.click(/My Groups/);
     await w.page.getByPlaceholder("e.g. GAFFERMATES26").fill("NOPE");
     await w.click(/Join Group/);
     await w.text("Invalid invite code");
@@ -296,7 +297,7 @@ test("the story page totals entries and accuracy across rounds, and hides this r
   await run({ loginAs: "ann", setup }, async w => {
     await w.click(/The Story So Far/);
     await w.text("Entries used");
-    const row = name => w.page.locator("tr", { hasText: name }).first();
+    const row = name => w.page.locator("table").nth(1).locator("tr", { hasText: name }).first();
     assert.match(await row("ann").innerText(), /3\s+4\/5\s+70%\s*\(7\/10\)/);     // 3 entries (2 past + 1 now), best 4/5
     assert.match(await row("bob").innerText(), /1\s+2\/5\s+40%\s*\(2\/5\)/);
     await w.text("Week 3 (in play)");
@@ -462,7 +463,7 @@ test("an invite link opens sign-up with the code filled in", async () => {
 
 test("a signed-in player opening an invite link lands on Join with the code filled in", async () => {
   await run({ loginAs: "ann", path: "/?join=BETA22" }, async w => {
-    await w.text("Join Another Group");
+    await w.text("My Groups");
     assert.equal(await w.page.getByPlaceholder("e.g. GAFFERMATES26").inputValue(), "BETA22");
     await w.click(/Join Group/);
     await w.text("Weekly Football Prediction League");
@@ -473,7 +474,7 @@ test("a signed-in player opening an invite link lands on Join with the code fill
 test("sharing an invite copies a link that opens straight to sign-up", async () => {
   await run({ loginAs: "ann" }, async w => {
     await w.context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: "https://gaffer.test" });
-    await w.click(/Join another group/);
+    await w.click(/My Groups/);
     await w.text("Invite friends to Alpha");
     await w.click(/Share invite link/);
     await w.text("Invite copied");
@@ -485,7 +486,7 @@ test("sharing an invite copies a link that opens straight to sign-up", async () 
 
 test("a player can start their own group, becomes its first member, and gets a working code", async () => {
   await run({ loginAs: "ann" }, async w => {
-    await w.click(/Join another group/);
+    await w.click(/My Groups/);
     await w.page.getByLabel("New group name").fill("Sunday League");
     await w.click(/Create group/);
     await w.text("Weekly Football Prediction League");
@@ -503,7 +504,7 @@ test("hitting the group limit shows a friendly message and creates nothing", asy
   await run({ loginAs: "ann" }, async w => {
     w.fake.hooks.beforeInsert.groups = () => "Group limit reached (3 per player)";
     const before = w.tables.groups.length;
-    await w.click(/Join another group/);
+    await w.click(/My Groups/);
     await w.page.getByLabel("New group name").fill("One too many");
     await w.click(/Create group/);
     await w.text("up to 3 of your own");
@@ -732,5 +733,124 @@ test("other players' picks are not sent to the browser until entries close", asy
     });
     assert.deepEqual(seen.find(x => x.username === "bob").preds, {});
     assert.equal(Object.keys(seen.find(x => x.username === "ann").preds).length, 5);
+  });
+});
+
+test("the story table sorts by any column: most or least accurate, most entries, name", async () => {
+  const h = (u, week, correct) => ({ group_id: "g-alpha", series: 1, week, username: u, entry_name: "Entry 1", correct, total: 5, perfect: false });
+  const setup = t => t.history.push(h("ann", 1, 3), h("ann", 2, 4), h("bob", 1, 2), h("Zed", 1, 4), h("Zed", 2, 4), h("Zed", 0, 4));
+  await run({ loginAs: "ann", setup }, async w => {
+    await w.click(/The Story So Far/);
+    await w.text("Entries used");
+    const order = () => w.page.locator("table").nth(1).locator("tbody tr").evaluateAll(rs => rs.map(r => r.querySelector("td").innerText.trim().split("\n").pop()));
+    await w.click("Sort by Accuracy");
+    assert.deepEqual(await order(), ["Zed", "ann", "bob"], "most accurate first");
+    await w.click("Sort by Accuracy");
+    assert.deepEqual(await order(), ["bob", "ann", "Zed"], "least accurate first");
+    await w.click("Sort by Entries");
+    assert.deepEqual((await order())[0], "Zed", "most entries first");
+    await w.click("Sort by Player");
+    assert.deepEqual(await order(), ["ann", "bob", "Zed"], "A to Z");
+  });
+});
+
+test("story weeks: newest first, newest open, older weeks tucked away until tapped", async () => {
+  const h = (week) => ({ group_id: "g-alpha", series: 1, week, username: "bob", entry_name: "Entry 1", correct: 2, total: 5, perfect: false });
+  await run({ loginAs: "ann", setup: t => t.history.push(h(1), h(2)) }, async w => {
+    await w.click(/The Story So Far/);
+    await w.text("Week 3 (in play)");
+    const weeks = () => w.page.locator("details").evaluateAll(ds => ds.map(d => [d.querySelector("summary").textContent.trim(), d.open]));
+    assert.deepEqual(await weeks(), [["Week 3 (in play)", true], ["Week 2", false], ["Week 1", false]]);
+    await w.page.getByText("Week 2").click();
+    assert.equal((await weeks())[1][1], true);
+  });
+});
+
+test("help: new visitors can read how to play on the sign-in page; players can open it from home", async () => {
+  await run({}, async w => {
+    await w.click("How does this work?");
+    await w.text("Get all 5 right and you win");
+    await w.page.getByText("Can I change an entry once").click();
+    await w.text("Entries are sealed");
+    await w.click("Hide help");
+    assert.equal(await w.page.getByText("Get all 5 right and you win").count(), 0);
+  });
+  await run({ loginAs: "ann" }, async w => {
+    await w.click(/How to play/);
+    await w.text("Get all 5 right and you win");
+    await w.text("What if a match is postponed?");
+    await w.click(/Back/);
+    await w.text("My Predictions");
+  });
+});
+
+test("all-time record: wins and entries per player across every run, sortable", async () => {
+  const h = (series, week, u, correct, perfect = false) => ({ group_id: "g-alpha", series, week, username: u, entry_name: "Entry 1", correct, total: 5, perfect });
+  const setup = t => t.history.push(h(1, 1, "bob", 5, true), h(1, 1, "bob", 2), h(1, 1, "ann", 5, true), h(1, 2, "ann", 3), h(2, 1, "bob", 5, true), h(2, 1, "bob", 5, true), h(2, 1, "ann", 1));
+  await run({ loginAs: "ann", setup }, async w => {
+    await w.click(/The Story So Far/);
+    await w.text("All-time record");
+    const rows = () => w.page.locator("table").first().locator("tbody tr").evaluateAll(rs => rs.map(r => [...r.querySelectorAll("td")].map(c => c.innerText.trim().split("\n").pop())));
+    // bob: 4 entries in 2 winning weeks (two perfect entries in one week count as ONE win); ann: 3 entries, 1 win
+    const r = await rows();
+    assert.deepEqual(r[0], ["bob", "2", "4", "2"]);
+    assert.deepEqual(r[1], ["ann", "1", "3", "3"]);
+    await w.click("Sort record by Entries per win");
+    assert.equal((await rows())[0][0], "bob", "fewest entries per win first");
+  });
+});
+
+test("with two groups, a banner says which one you're playing in and follows the dropdown", async () => {
+  await run({ loginAs: "ann", setup: t => t.memberships.push({ username: "ann", group_id: "g-beta" }) }, async w => {
+    const banner = () => w.page.getByRole("status").filter({ hasText: "Playing in" }).first().innerText();
+    await w.page.locator("select").first().selectOption("g-alpha");
+    await w.text("Weekly Football Prediction League");
+    assert.match(await banner(), /Playing in\s+Alpha/i);
+    await w.click(/Lobby/);
+    assert.match(await banner(), /Alpha/, "still shown on other screens");
+    await w.page.locator("select").first().selectOption("g-beta");
+    assert.match(await banner(), /Beta/);
+  });
+});
+
+test("with one group there is no banner (the name is already in the top bar)", async () => {
+  await run({ loginAs: "bob" }, async w => {
+    await w.text("Weekly Football Prediction League");
+    assert.equal(await w.page.getByText("Playing in").count(), 0);
+  });
+});
+
+test("an entry identical to one you already made is blocked with a warning; changing one pick unblocks it", async () => {
+  await run({ loginAs: "ann" }, async w => {
+    await w.click(/My Predictions/); await w.click(/Add Entry/);
+    await sealEntry(w, "home", "draw", "away", "home", "draw");
+    await w.text("Entry sealed");
+    await w.click(/Add Entry/);
+    for (const [i, k] of ["Home Win", "Draw", "Away Win", "Home Win", "Draw"].entries()) await w.page.locator(`button:has-text("${k}")`).nth(i).click();
+    await w.text("exactly the same as Entry 1");
+    const seal = w.page.getByRole("button", { name: /Seal This Entry/ });
+    assert.equal(await seal.isDisabled(), true);
+    await w.page.locator('button:has-text("Away Win")').nth(4).click();      // change the last pick
+    assert.equal(await w.page.getByText("exactly the same as").count(), 0);
+    assert.equal(await seal.isDisabled(), false);
+    await seal.click();
+    await w.text("Entry sealed");
+    assert.equal(w.tables.submissions.filter(s => s.username === "ann" && s.group_id === "g-alpha").length, 2);
+  });
+});
+
+test("the same picks are fine in a different group", async () => {
+  await run({ loginAs: "ann", setup: t => t.memberships.push({ username: "ann", group_id: "g-beta" }) }, async w => {
+    await w.page.locator("select").first().selectOption("g-alpha");
+    await w.click(/My Predictions/); await w.click(/Add Entry/);
+    await sealEntry(w, "draw", "draw", "draw", "draw", "draw");
+    await w.text("Entry sealed");
+    await w.click(/Back|THE GAFFER/).catch(() => {});
+    await w.page.locator("select").first().selectOption("g-beta");
+    await w.click(/My Predictions/);
+    await w.click(/Add Entry/).catch(() => {});
+    await sealEntry(w, "draw", "draw", "draw", "draw", "draw");
+    await w.text("Entry sealed");
+    assert.equal(w.tables.submissions.filter(s => s.username === "ann").length, 2);
   });
 });
