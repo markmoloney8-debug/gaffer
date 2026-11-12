@@ -1,5 +1,6 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { buildApp, launch, newWorld, picks, ADMIN_PIN, HOUR } from "./harness.mjs";
 
 let bundle, browser;
@@ -582,5 +583,154 @@ test("new entry cards show each team's recent form, and nothing when there is no
     await w.page.getByLabel("Chelsea recent form: L L D W L").waitFor();
     assert.equal(await w.page.getByLabel(/recent form/).count(), 2, "only the fixture that has form shows any");
     assert.equal(await w.page.getByText("Form", { exact: true }).count(), 1);
+  });
+});
+
+test("the lobby shows how many entries each player has, not their auto-names, and the countdown includes days", async () => {
+  const setup = t => t.submissions.push(seeEntry("ann", "g-alpha", "Entry 1", "home", "home", "home", "home", "home"),
+                                        seeEntry("bob", "g-alpha", "Entry 1", "away", "away", "away", "away", "away"),
+                                        seeEntry("bob", "g-alpha", "Entry 2", "draw", "draw", "draw", "draw", "draw"));
+  await run({ loginAs: "ann", setup }, async w => {          // kick-off is 48h away in the harness
+    await w.click(/Lobby/);
+    await w.text("1 entry");
+    await w.text("2 entries");
+    assert.equal(await w.page.getByText(/Entry 1/).count(), 0, "auto-names are not listed");
+    await w.text(/^\d+d \d\d:\d\d:\d\d$/);
+  });
+});
+
+// ── Real sign-in ───────────────────────────────────────────────────────────
+async function signIn(w, name, pw) {
+  await w.page.getByPlaceholder("your_username").fill(name);
+  await w.page.locator('input[type="password"]').first().fill(pw);
+  await w.click(/Sign In →/);
+}
+
+test("signing in: the right password gets you in (any letter case), a wrong one does not", async () => {
+  await run({}, async w => {
+    await signIn(w, "ann", "wrong-one");
+    await w.text("Wrong username or password");
+    await signIn(w, "ANN", "secret1");
+    await w.text("ann · Alpha");
+  });
+});
+
+test("an old-style account signs in with the same password and is moved to the new sign-in", async () => {
+  await run({}, async w => {
+    await signIn(w, "Old Timer", "nope");
+    await w.text("Wrong username or password");
+    assert.equal(w.tables.users.find(u => u.username === "Old Timer").auth_id, null, "a wrong password changes nothing");
+    await signIn(w, "old timer", "hunter22");
+    await w.text("Old Timer · Alpha");
+    const row = w.tables.users.find(u => u.username === "Old Timer");
+    assert.ok(row.auth_id); assert.equal(row.password_hash, null);
+  });
+});
+
+test("an old password that is too short gets a clear explanation", async () => {
+  await run({ setup: t => t.users.push({ username: "Shorty", handle: "shorty", auth_id: null, password_hash: createHash("sha256").update("abcd").digest("hex") }) }, async w => {
+    await signIn(w, "Shorty", "abcd");
+    await w.text("too short for the new sign-in");
+  });
+});
+
+test("staying signed in: a player whose token is out of date is renewed without being asked again", async () => {
+  await run({ loginAs: "ann" }, async w => {
+    await w.page.evaluate(() => { const a = JSON.parse(localStorage.getItem("fp_auth")); a.expires_at = Date.now() - 1000; localStorage.setItem("fp_auth", JSON.stringify(a)); });
+    await w.page.reload();
+    await w.text("ann · Alpha");
+    assert.ok(await w.page.evaluate(() => JSON.parse(localStorage.getItem("fp_auth")).expires_at > Date.now() + 60000), "renewed");
+  });
+});
+
+test("signing out removes the sign-in token", async () => {
+  await run({ loginAs: "ann" }, async w => {
+    await w.click("Sign out");
+    await w.text("Sign In →");
+    assert.equal(await w.page.evaluate(() => localStorage.getItem("fp_auth")), null);
+  });
+});
+
+test("forgot password: a request is saved for the admin; asking again too soon is explained", async () => {
+  await run({}, async w => {
+    await w.click("Forgot password?");
+    await w.page.getByPlaceholder("your_username").fill("Dave from the pub");
+    await w.page.getByPlaceholder(/pub league/).fill("Pete's mate");
+    await w.click("Send reset request");
+    await w.text("Request sent");
+    assert.deepEqual(w.tables.reset_requests.map(r => [r.username, r.note, r.status]), [["Dave from the pub", "Pete's mate", "new"]]);
+    w.fake.hooks.beforeInsert.reset_requests = () => "Please wait a few minutes before asking again";
+    await w.click("Send reset request");
+    await w.text("already asked recently");
+    assert.equal(w.tables.reset_requests.length, 1);
+  });
+});
+
+test("forgot password needs a username first", async () => {
+  await run({}, async w => {
+    await w.click("Forgot password?");
+    await w.click("Send reset request");
+    await w.text("Type your username first");
+    assert.equal(w.tables.reset_requests.length, 0);
+  });
+});
+
+test("the admin sees reset requests, sets a temporary password, and the player can then sign in with it", async () => {
+  await run({ loginAs: "ann", setup: t => t.reset_requests.push({ id: "rr1", username: "bob", note: "Bob here, locked out", status: "new", created_at: new Date().toISOString() }) }, async w => {
+    await adminIn(w);
+    await w.text("Password resets (1 waiting)");
+    await w.text("Bob here, locked out");
+    await w.click("Set temporary password");
+    await w.text("Temporary password for");
+    const temp = w.fake.logins.find(l => l.username === "bob").password;
+    assert.notEqual(temp, "secret1");
+    await w.text(temp);
+    await w.text("Nobody is waiting");
+    assert.equal(w.tables.reset_requests[0].status, "done");
+    await w.page.goto("https://gaffer.test/");                      // fresh page, then bob signs in with the temporary password
+    await w.click("Sign out");
+    await signIn(w, "bob", temp);
+    await w.text("bob · Alpha");
+  });
+});
+
+test("the admin can dismiss a reset request without changing anyone's password", async () => {
+  await run({ loginAs: "ann", setup: t => t.reset_requests.push({ id: "rr1", username: "bob", status: "new", created_at: new Date().toISOString() }) }, async w => {
+    await adminIn(w);
+    await w.click("Dismiss");
+    await w.text("Nobody is waiting");
+    assert.equal(w.fake.logins.find(l => l.username === "bob").password, "secret1");
+  });
+});
+
+test("a player can change their own password, then sign in with the new one only", async () => {
+  await run({ loginAs: "ann" }, async w => {
+    await w.page.getByRole("button", { name: "Profile" }).first().click().catch(async () => { await w.page.getByLabel(/profile/i).first().click(); });
+    await w.page.getByLabel("New password").fill("abc");
+    await w.click("Change");
+    await w.text("at least 6 characters");
+    await w.page.getByLabel("New password").fill("brand-new-1");
+    await w.click("Change");
+    await w.text("Password changed");
+    await w.click(/Back/);
+    await w.click("Sign out");
+    await signIn(w, "ann", "secret1");
+    await w.text("Wrong username or password");
+    await signIn(w, "ann", "brand-new-1");
+    await w.text("ann · Alpha");
+  });
+});
+
+test("other players' picks are not sent to the browser until entries close", async () => {
+  const setup = t => t.submissions.push(seeEntry("bob", "g-alpha", "Entry 1", "home", "home", "home", "home", "home"), seeEntry("ann", "g-alpha", "Entry 1", "away", "away", "away", "away", "away"));
+  await run({ loginAs: "ann", setup }, async w => {                 // kick-off is 48 hours away
+    await w.text("ann · Alpha");
+    const seen = await w.page.evaluate(async () => {
+      const a = JSON.parse(localStorage.getItem("fp_auth"));
+      const r = await fetch("https://oszrnwhyvmvccxxepsnm.supabase.co/rest/v1/rpc/group_entries", { method: "POST", headers: { Authorization: `Bearer ${a.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ gid: "g-alpha" }) });
+      return r.json();
+    });
+    assert.deepEqual(seen.find(x => x.username === "bob").preds, {});
+    assert.equal(Object.keys(seen.find(x => x.username === "ann").preds).length, 5);
   });
 });

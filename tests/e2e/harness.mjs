@@ -3,6 +3,7 @@ import { build } from "esbuild";
 import { chromium } from "playwright";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { createFakeSupabase } from "./fake-supabase.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -47,18 +48,26 @@ export async function newWorld(browser, bundle, { loginAs, setup, kickoff = 48 *
   tables.round.push({ id: 1, league: { id: "epl", name: "Premier League", flag: "⚽", code: "PL" }, fixtures: fixtures(kickoff),
     mock_results: null, results, week: 3, locked: false, winners_found: false, created_at: new Date().toISOString() });
 
-  const hash = "a".repeat(64);
   for (const [u, g] of [["ann", "g-alpha"], ["bob", "g-alpha"], ["cat", "g-beta"]]) {
-    tables.users.push({ username: u, password_hash: hash, group_id: g });
+    const login = fake.addLogin(u, "secret1");
+    tables.users.push({ username: u, handle: u, auth_id: login.id });
     tables.memberships.push({ username: u, group_id: g });
   }
+  // Someone from before the new sign-in: still on an old-style password
+  tables.users.push({ username: "Old Timer", handle: "old-s-timer", auth_id: null, password_hash: createHash("sha256").update("hunter22").digest("hex") });
+  tables.memberships.push({ username: "Old Timer", group_id: "g-alpha" });
+  tables.admins.push({ username: "ann" });
   if (setup) setup(tables);
 
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
-  if (loginAs) await context.addInitScript(u => localStorage.setItem("fp_session", u), loginAs);
+  if (loginAs) await context.addInitScript(u => {
+    localStorage.setItem("fp_session", u);
+    localStorage.setItem("fp_auth", JSON.stringify({ access_token: `tok:${u}`, refresh_token: `refresh:${u}`, expires_at: Date.now() + 864e5, username: u }));
+  }, loginAs);
   await context.route("**/*", route => {
     const url = route.request().url();
     if (url.includes("/rest/v1/")) return fake.handle(route);
+    if (url.includes("/auth/v1/") || url.includes("/functions/v1/")) return fake.handleAuth(route);
     { const u = new URL(url); if (u.origin + u.pathname === ORIGIN + "/") return route.fulfill({ status: 200, contentType: "text/html", body: HTML }); }
     if (url === ORIGIN + "/app.js") return route.fulfill({ status: 200, contentType: "application/javascript", body: bundle });
     return route.abort();                                // fonts and anything else external
