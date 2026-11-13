@@ -398,21 +398,21 @@ function PinModal({ onSuccess, onCancel }) {
 
 // ─── How to play + FAQ ────────────────────────────────────────────────────────
 const HOW_TO_PLAY = [
-  "Each week you pick home, draw or away for 5 Premier League fixtures.",
+  "Each week you pick home, draw or away for 5 randomly selected Premier League fixtures.",
   `You can make up to ${MAX_ENTRIES} entries a week. Each one is a separate set of picks.`,
-  "Entries lock 1 minute before the first kick-off. Until then, nobody can see anyone else's picks.",
+  "You can edit your entries until they lock, 1 minute before the first kick-off. Until then, nobody can see anyone else's picks.",
   "Get all 5 right and you win. If more than one person does, you share it.",
   "If nobody gets all 5, the run carries on to next week and everyone's entries keep adding up on The Story So Far.",
 ];
 const FAQ = [
   ["What does it cost?", "Nothing. It's a game between friends. If you enjoy it, there's a tip link on the results screen."],
-  ["Can I change an entry once I've made it?", "No. Entries are sealed when you submit them, so check your picks first. You can use another entry for a different set of picks."],
+  ["Can I change an entry once I've made it?", "Yes, until entries lock (1 minute before the first kick-off). Open My Entries and tap Edit. After that, entries are sealed."],
   ["What if a match is postponed?", "The admin either voids it, which counts it as correct for everyone, or swaps in a replacement. If it's replaced, you re-pick just that match from the Lobby."],
   ["Why can't I see everyone else's picks?", "They stay hidden until entries lock, so nobody can copy. After the lock, picks are revealed in stages."],
   ["Who wins?", "Anyone who gets all 5 right in a week. Nobody gets 5? The run carries on and the entries keep adding up."],
   ["How do I invite friends or start my own group?", "Tap My Groups on the home screen. There you can share an invite link for your group, or create a new group of your own (up to 3)."],
   ["I forgot my password.", "On the sign-in page tap Forgot password?, type your username and send the request. The admin will set you a temporary password. You can change it on your profile."],
-  ["Which games count?", "Five Premier League fixtures each week, chosen by the admin. Results are collected automatically."],
+  ["Which games count?", "Five randomly selected Premier League fixtures each week. Results are collected automatically."],
 ];
 function HelpContent() {
   return (
@@ -594,6 +594,7 @@ export default function App() {
   const [preds,     setPreds]     = useState({});
   const [entryView, setEntryView] = useState("list");
   const [submitDone,setSubmitDone]= useState(false);
+  const [editing,   setEditing]   = useState(null);   // the entry being edited, or null when making a new one
 
   // ── Theme ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -830,7 +831,8 @@ export default function App() {
   const canAddEntry    = myEntries.length < MAX_ENTRIES && !deadlineLocked;
   const allPicked      = Object.keys(preds).length === 5;
   // An entry with exactly the same picks as one you already made in this group is refused.
-  const duplicateOf    = allPicked ? myEntries.find(e=>[0,1,2,3,4].every(i=>e.preds&&e.preds[i]===preds[i])) : null;
+  const duplicateOf    = allPicked ? myEntries.find(e=>(!editing||e.id!==editing.id)&&[0,1,2,3,4].every(i=>e.preds&&e.preds[i]===preds[i])) : null;
+  const unchanged      = !!editing && [0,1,2,3,4].every(i=>editing.preds&&editing.preds[i]===preds[i]);
 
   // ── Admin gate ────────────────────────────────────────────────────────────
   function requireAdmin(target) {
@@ -846,16 +848,17 @@ export default function App() {
 
   // ── Submit an entry ───────────────────────────────────────────────────────
   async function submitEntry() {
-    if (!allPicked||!canAddEntry||round?.locked||deadlineLocked) return;
+    if (!allPicked||(!editing&&!canAddEntry)||round?.locked||deadlineLocked) return;
     if (duplicateOf) { setError(`Those picks are exactly the same as ${duplicateOf.entryName}. Change at least one pick.`); return; }
     setError("");
-    setLoading(true); setLoadMsg("Sealing entry…");
+    setLoading(true); setLoadMsg(editing?"Saving changes…":"Sealing entry…");
     try {
-      await db.addSub(username, `Entry ${myEntries.length+1}`, preds, groupId);   // auto-named, no typing needed
+      if (editing) await db.updateSubPreds(editing.id, { 0:preds[0], 1:preds[1], 2:preds[2], 3:preds[3], 4:preds[4] });
+      else await db.addSub(username, `Entry ${myEntries.length+1}`, preds, groupId);   // auto-named, no typing needed
       const s = await db.getSubs(groupId);
       setSubs(s);
-      setPreds({}); setEntryName(""); setEntryView("list"); setSubmitDone(true);
-    } catch { setError("Couldn't save entry — try again."); }
+      setPreds({}); setEntryName(""); setEntryView("list"); setSubmitDone(editing?"updated":true); setEditing(null);
+    } catch { setError(editing?"Couldn't save your changes. If entries have just closed, they can't be changed now.":"Couldn't save entry — try again."); }
     setLoading(false);
   }
 
@@ -976,7 +979,7 @@ export default function App() {
           <span style={{fontSize:13,color:"var(--muted)",maxWidth:110,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{username}{myGroups.length===1&&groupName?` · ${groupName}`:""}</span>
           {myGroups.length>1&&(
             <select value={groupId||""} onChange={e=>switchGroup(e.target.value)}
-              style={{...S.input,width:"auto",maxWidth:130,padding:"4px 8px",fontSize:12,border:`2px solid hsl(${groupHue(groupId)} 65% 52%)`}}>
+              style={{...S.input,width:"auto",maxWidth:"min(280px, 44vw)",padding:"4px 8px",fontSize:12,border:`2px solid hsl(${groupHue(groupId)} 65% 52%)`}}>
               {myGroups.map(g=><option key={g.id} value={g.id}>{gLabel(g)}</option>)}
             </select>
           )}
@@ -1228,18 +1231,18 @@ export default function App() {
                       })}
                     </div>
                   </div>
-                  <span style={{fontSize:11,color:"var(--muted)"}}>🔒</span>
+                  <button onClick={()=>{setEditing(e);setPreds({0:e.preds[0],1:e.preds[1],2:e.preds[2],3:e.preds[3],4:e.preds[4]});setError("");setSubmitDone(false);setEntryView("new");}} aria-label={`Edit ${e.entryName}`} style={{alignSelf:"flex-start",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,color:"var(--text)",fontSize:12,fontWeight:600,padding:"6px 10px",cursor:"pointer"}}>✏️ Edit</button>
                 </div>
               ))}
             </div>
           )}
           {submitDone&&myEntries.length>0&&(
             <div style={S.successBanner} className="pop">
-              ✅ Entry sealed!{canAddEntry?` ${MAX_ENTRIES-myEntries.length} slot${MAX_ENTRIES-myEntries.length!==1?"s":""} remaining.`:" You've used all your entries."}
+              {submitDone==="updated"?"✅ Entry updated. You can keep editing until entries lock.":<>✅ Entry sealed! You can still edit it until entries lock.{canAddEntry?` ${MAX_ENTRIES-myEntries.length} slot${MAX_ENTRIES-myEntries.length!==1?"s":""} remaining.`:" You've used all your entries."}</>}
             </div>
           )}
           {canAddEntry
-            ?<Btn gold onClick={()=>{setEntryView("new");setSubmitDone(false);setPreds({});setEntryName("");}}>
+            ?<Btn gold onClick={()=>{setEditing(null);setEntryView("new");setSubmitDone(false);setPreds({});setEntryName("");}}>
                 + Add Entry {myEntries.length>0?`(${MAX_ENTRIES-myEntries.length} left)`:""}
               </Btn>
             :<div style={{fontSize:13,color:"var(--muted)",textAlign:"center"}}>You've used all {MAX_ENTRIES} entries for this round.</div>
@@ -1249,8 +1252,8 @@ export default function App() {
 
       {view==="submit"&&round&&!round.locked&&!deadlineLocked&&entryView==="new"&&(
         <Screen wide>
-          <BackBtn onClick={()=>setEntryView("list")}/>
-          <SectionTitle eyebrow={`Entry ${myEntries.length+1} of ${MAX_ENTRIES}`} title="New Entry" sub="Pick a result for all 5 fixtures."/>
+          <BackBtn onClick={()=>{setEntryView("list");setEditing(null);setPreds({});}}/>
+          <SectionTitle eyebrow={editing?editing.entryName:`Entry ${myEntries.length+1} of ${MAX_ENTRIES}`} title={editing?"Edit Entry":"New Entry"} sub={editing?"Change any pick. You can edit until entries lock.":"Pick a result for all 5 fixtures. You can edit until entries lock."}/>
           <div style={{display:"flex",flexDirection:"column",gap:10,width:"100%"}}>
             {round.fixtures.map((f,i)=>(
               <div key={i} style={S.fixtureCard}>
@@ -1280,12 +1283,12 @@ export default function App() {
             <div style={S.progressTrack}><div style={{...S.progressFill,width:`${(Object.keys(preds).length/5)*100}%`}}/></div>
             <div style={{display:"flex",justifyContent:"space-between",marginTop:5}}>
               <span style={{fontSize:11,color:"var(--muted)"}}>{Object.keys(preds).length}/5 picked</span>
-              <span style={{fontSize:11,color:"var(--muted)"}}>Sealed on submit</span>
+              <span style={{fontSize:11,color:"var(--muted)"}}>{editing?"Saved when you tap save":"Editable until entries lock"}</span>
             </div>
           </div>
-          {duplicateOf&&<div role="alert" style={{fontSize:13,color:"var(--gold)",textAlign:"center",lineHeight:1.5}}>⚠️ These picks are exactly the same as {duplicateOf.entryName}. Change at least one pick to seal this entry.</div>}
+          {duplicateOf&&<div role="alert" style={{fontSize:13,color:"var(--gold)",textAlign:"center",lineHeight:1.5}}>⚠️ These picks are exactly the same as {duplicateOf.entryName}. Change at least one pick.</div>}
           {loading?<Loader msg={loadMsg}/>:
-            <Btn gold onClick={submitEntry} disabled={!allPicked||!!duplicateOf}>🔒 Seal This Entry</Btn>}
+            <Btn gold onClick={submitEntry} disabled={!allPicked||!!duplicateOf||unchanged}>{editing?(unchanged?"No changes yet":"💾 Save changes"):"✅ Save Entry"}</Btn>}
         </Screen>
       )}
 
@@ -1583,25 +1586,40 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
   const sortBy = key => setSort(c => c.key===key ? { key, dir:c.dir==="asc"?"desc":"asc" } : { key, dir:key==="player"?"asc":"desc" });
   const sortTh = (key,label) => (
     <th style={cell} aria-sort={sort.key===key?(sort.dir==="asc"?"ascending":"descending"):"none"}>
-      <button onClick={()=>sortBy(key)} aria-label={`Sort by ${label}`} style={{background:"none",border:"none",color:"inherit",font:"inherit",textTransform:"inherit",letterSpacing:"inherit",padding:0,cursor:"pointer"}}>
-        {label}{sort.key===key?(sort.dir==="asc"?" ▲":" ▼"):""}
+      <button onClick={()=>sortBy(key)} aria-label={`Sort by ${label}`} style={{background:"none",border:"none",color:"inherit",font:"inherit",textTransform:"inherit",letterSpacing:"inherit",padding:0,cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:3}}>
+        {label}{sort.key===key?(sort.dir==="asc"?" ▲":" ▼"):<span aria-hidden="true" style={{opacity:0.7}}> ⇅</span>}
       </button>
     </th>);
   const winners = players.filter(p=>p.won);
 
   // All-time record across every run: how often each player has won, and how many entries it took them.
-  const allRows = history.map(h=>({ key:`${h.series}|${h.week}`, username:h.username, perfect:!!h.perfect }));
+  const allRows = history.map(h=>({ series:h.series, week:h.week, key:`${h.series}|${h.week}`, username:h.username, perfect:!!h.perfect }));
   if (round && !history.some(h=>h.series===current && h.week===round.week)) {
     const res = round.mockResults || round.results;
     const done = round.winnersFound && Array.isArray(res);
-    subs.forEach(x=>allRows.push({ key:`${current}|${round.week}`, username:x.username, perfect:done&&isPerfect(x,res) }));
+    subs.forEach(x=>allRows.push({ series:current, week:round.week, key:`${current}|${round.week}`, username:x.username, perfect:done&&isPerfect(x,res) }));
   }
+  // The pot: every entry made since the last win counts as one. It is shared equally between the players who got
+  // all 5 that week (a player with two perfect entries is still one winner), so a lone winner takes the lot.
+  const won = {};
+  [...new Set(allRows.map(r=>r.series))].forEach(sr=>{
+    const inSeries = allRows.filter(r=>r.series===sr);
+    let prev = -Infinity;
+    [...new Set(inSeries.filter(r=>r.perfect).map(r=>r.week))].sort((a,b)=>a-b).forEach(wk=>{
+      const pot = inSeries.filter(r=>r.week>prev && r.week<=wk).length;
+      const winnersNow = [...new Set(inSeries.filter(r=>r.week===wk && r.perfect).map(r=>r.username))];
+      winnersNow.forEach(u=>{ won[u] = (won[u]||0) + pot/winnersNow.length; });
+      prev = wk;
+    });
+  });
+  const r1 = n => Math.round(n*10)/10;
   const record = [...new Set(allRows.map(r=>r.username))].map(u=>{
     const mine = allRows.filter(r=>r.username===u);
     const wins = new Set(mine.filter(r=>r.perfect).map(r=>r.key)).size;   // a win is a week with at least one perfect entry
-    return { username:u, wins, entries:mine.length, perWin: wins ? Math.round((mine.length/wins)*10)/10 : null };
+    const entriesWon = r1(won[u]||0);
+    return { username:u, wins, entries:mine.length, entriesWon, net: r1(entriesWon - mine.length) };
   });
-  const ALL = { player:p=>p.username.toLowerCase(), wins:p=>p.wins, entries:p=>p.entries, perWin:p=>p.perWin };
+  const ALL = { player:p=>p.username.toLowerCase(), wins:p=>p.wins, entries:p=>p.entries, entriesWon:p=>p.entriesWon, net:p=>p.net };
   { const val = ALL[sortAll.key], dir = sortAll.dir==="asc" ? 1 : -1;
     record.sort((a,b)=>{
       const x=val(a), y=val(b);
@@ -1609,11 +1627,11 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
       if (x==null) return 1; if (y==null) return -1;
       return (x<y?-1:x>y?1:0)*dir || b.entries-a.entries || a.username.localeCompare(b.username);
     }); }
-  const sortAllBy = key => setSortAll(c => c.key===key ? { key, dir:c.dir==="asc"?"desc":"asc" } : { key, dir:key==="player"||key==="perWin"?"asc":"desc" });
+  const sortAllBy = key => setSortAll(c => c.key===key ? { key, dir:c.dir==="asc"?"desc":"asc" } : { key, dir:key==="player"?"asc":"desc" });
   const allTh = (key,label) => (
     <th style={cell} aria-sort={sortAll.key===key?(sortAll.dir==="asc"?"ascending":"descending"):"none"}>
-      <button onClick={()=>sortAllBy(key)} aria-label={`Sort record by ${label}`} style={{background:"none",border:"none",color:"inherit",font:"inherit",textTransform:"inherit",letterSpacing:"inherit",padding:0,cursor:"pointer"}}>
-        {label}{sortAll.key===key?(sortAll.dir==="asc"?" ▲":" ▼"):""}
+      <button onClick={()=>sortAllBy(key)} aria-label={`Sort record by ${label}`} style={{background:"none",border:"none",color:"inherit",font:"inherit",textTransform:"inherit",letterSpacing:"inherit",padding:0,cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:3}}>
+        {label}{sortAll.key===key?(sortAll.dir==="asc"?" ▲":" ▼"):<span aria-hidden="true" style={{opacity:0.7}}> ⇅</span>}
       </button>
     </th>);
 
@@ -1639,24 +1657,25 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
         ? <div style={{color:"var(--muted)",fontSize:13,textAlign:"center",padding:"16px 0"}}>Nothing here yet.</div>
         : <>
           <div style={{width:"100%"}} aria-label="All-time record">
-            <div style={S.sectionLabel}>All-time record</div>
+            <div style={S.sectionLabel}>All-time record <span style={{textTransform:"none",letterSpacing:0,fontWeight:400}}>(tap a heading to sort)</span></div>
             <table style={{width:"100%",borderCollapse:"collapse"}}>
               <thead><tr style={{textAlign:"left",color:"var(--muted)",fontSize:11,textTransform:"uppercase",letterSpacing:"0.06em"}}>
-                {allTh("player","Player")}{allTh("wins","Wins")}{allTh("entries","Entries")}{allTh("perWin","Entries per win")}
+                {allTh("player","Player")}{allTh("wins","Wins")}{allTh("entries","Entries")}{allTh("entriesWon","Entries won")}{allTh("net","Net")}
               </tr></thead>
               <tbody>{record.map(p=>(
                 <tr key={p.username}>
                   <td style={cell}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Avatar name={p.username} size={20}/>{p.username}</span></td>
                   <td style={cell}>{p.wins}</td>
                   <td style={cell}>{p.entries}</td>
-                  <td style={cell}>{p.perWin===null?"-":p.perWin}</td>
+                  <td style={cell}>{p.entriesWon}</td>
+                  <td style={{...cell,fontWeight:700,color:p.net>0?"var(--green)":p.net<0?"var(--danger-text)":"var(--text)"}}>{p.net>0?`+${p.net}`:p.net}</td>
                 </tr>))}</tbody>
             </table>
-            <div style={{fontSize:11,color:"var(--muted)",marginTop:6}}>Across every run. A win is a week with a perfect 5. Shared wins count for everyone who got it. Entries include this week's.</div>
+            <div style={{fontSize:11,color:"var(--muted)",marginTop:6}}>Across every run. A win is a week with a perfect 5. Entries won is each winner's share of the pot: every entry made since the last win, split equally between the players who got all 5. Net is entries won minus entries made (£ at £1 an entry).</div>
           </div>
 
           <div style={{width:"100%"}}>
-            <div style={S.sectionLabel}>Entries used</div>
+            <div style={S.sectionLabel}>Entries used <span style={{textTransform:"none",letterSpacing:0,fontWeight:400}}>(tap a heading to sort)</span></div>
             <table style={{width:"100%",borderCollapse:"collapse"}}>
               <thead><tr style={{textAlign:"left",color:"var(--muted)",fontSize:11,textTransform:"uppercase",letterSpacing:"0.06em"}}>
                 {sortTh("player","Player")}{sortTh("entries","Entries")}{sortTh("best","Best")}{sortTh("acc","Accuracy")}
