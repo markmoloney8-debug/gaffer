@@ -854,3 +854,16 @@ test("the same picks are fine in a different group", async () => {
     assert.equal(w.tables.submissions.filter(s => s.username === "ann").length, 2);
   });
 });
+
+test("round dates replace 'Week N' on the entry screens, and the group banner is not hidden behind the top bar", async () => {
+  await run({ loginAs: "ann", setup: t => t.memberships.push({ username: "ann", group_id: "g-beta" }) }, async w => {
+    await w.page.locator("select").first().selectOption("g-alpha");
+    await w.click(/My Predictions/);
+    const eyebrow = await w.page.getByText(/PREMIER LEAGUE ·/i).first().innerText();
+    assert.match(eyebrow, /\b(MON|TUE|WED|THU|FRI|SAT|SUN) \d{1,2}\b/i, "shows match dates");
+    assert.doesNotMatch(eyebrow, /Week \d/);
+    const bannerTop = await w.page.getByRole("status").filter({ hasText: "Playing in" }).first().evaluate(e => e.getBoundingClientRect().top);
+    const navBottom = await w.page.locator("div").filter({ hasText: /^⚽ THE GAFFER/ }).first().evaluate(e => { let n = e; while (n && getComputedStyle(n).position !== "fixed") n = n.parentElement; return n ? n.getBoundingClientRect().bottom : 0; });
+    assert.ok(bannerTop >= navBottom - 1, `banner (${bannerTop}) must sit below the top bar (${navBottom})`);
+  });
+});
