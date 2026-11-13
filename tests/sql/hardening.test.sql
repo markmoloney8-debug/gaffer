@@ -62,15 +62,30 @@ select expect_error($$insert into submissions(username, entry_name, preds, group
 select expect_error($$insert into submissions(username, entry_name, preds, group_id) values
   ('ann', 'x', '[]', '00000000-0000-0000-0000-000000000002')$$, 'Invalid predictions');
 
--- 5. A normal pick cannot be edited, but a replaced slot can be re-picked
-select expect_error($$update submissions set preds = jsonb_set(preds, '{0}', '"away"') where username='ann' and entry_name='Entry 1' and group_id='00000000-0000-0000-0000-000000000001'$$,
+-- 5a. While entries are open (first kick-off is 2 hours away) a player can change any pick on their own entry
+update submissions set preds = jsonb_set(preds, '{0}', '"away"') where username='ann' and entry_name='Entry 1' and group_id='00000000-0000-0000-0000-000000000001';
+do $$ begin
+  if (select preds->>'0' from submissions where username='ann' and entry_name='Entry 1' and group_id='00000000-0000-0000-0000-000000000001') <> 'away' then
+    raise exception 'edit before the deadline did not stick';
+  end if;
+end $$;
+select expect_error($$update submissions set preds = jsonb_set(preds, '{0}', '"nonsense"') where username='ann' and entry_name='Entry 1' and group_id='00000000-0000-0000-0000-000000000001'$$,
+  'Invalid prediction');
+select expect_error($$update submissions set preds = preds - '0' where username='ann' and entry_name='Entry 1' and group_id='00000000-0000-0000-0000-000000000001'$$,
+  'Invalid predictions');   -- an ordinary pick can never be removed
+select expect_error($$update submissions set preds = '[]' where username='ann' and entry_name='Entry 1' and group_id='00000000-0000-0000-0000-000000000001'$$,
+  'Invalid predictions');
+select expect_error($$update submissions set username='bob' where username='ann' and entry_name='Entry 1' and group_id='00000000-0000-0000-0000-000000000001'$$,
+  'cannot be moved');
+
+-- 5b. Inside the final minute before the first kick-off everything is frozen, except a replaced slot
+update round set fixtures = jsonb_set(fixtures, '{0,kickoffTs}', to_jsonb(ms(0) + 30000));
+select expect_error($$update submissions set preds = jsonb_set(preds, '{0}', '"home"') where username='ann' and entry_name='Entry 1' and group_id='00000000-0000-0000-0000-000000000001'$$,
   'can no longer be changed');
 update submissions set preds = preds - '2' where username='ann' and entry_name='Entry 1' and group_id='00000000-0000-0000-0000-000000000001';
 update submissions set preds = jsonb_set(preds, '{2}', '"draw"') where username='ann' and entry_name='Entry 1' and group_id='00000000-0000-0000-0000-000000000001';
 select expect_error($$update submissions set preds = jsonb_set(preds, '{2}', '"nonsense"') where username='ann' and entry_name='Entry 1' and group_id='00000000-0000-0000-0000-000000000001'$$,
   'Invalid prediction');
-select expect_error($$update submissions set username='bob' where username='ann' and entry_name='Entry 1' and group_id='00000000-0000-0000-0000-000000000001'$$,
-  'cannot be moved');
 
 -- 6. Re-picking is refused once the replacement is about to kick off
 update round set fixtures = jsonb_set(fixtures, '{2,kickoffTs}', to_jsonb(ms(0)));
