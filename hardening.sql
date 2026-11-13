@@ -56,6 +56,29 @@ begin
     raise exception 'An entry cannot be moved';
   end if;
   select fixtures into fx from round where id = 1;
+  select min((f->>'kickoffTs')::bigint) into first_ko
+    from round r, jsonb_array_elements(r.fixtures) f where r.id = 1;
+  if new.preds is null or jsonb_typeof(new.preds) <> 'object' then
+    raise exception 'Invalid predictions';
+  end if;
+
+  -- While entries are still open a player may change any pick on their own entry.
+  -- (A pick may only be missing where the fixture has just been replaced and is waiting to be re-picked.)
+  if first_ko is null or now_ms < first_ko - 60000 then
+    for k in 0..4 loop
+      v := new.preds->>(k::text);
+      if v is null then
+        if not coalesce((fx->k->>'replaced')::boolean, false) then
+          raise exception 'Invalid predictions';
+        end if;
+      elsif v not in ('home', 'draw', 'away') then
+        raise exception 'Invalid prediction';
+      end if;
+    end loop;
+    return new;
+  end if;
+
+  -- Once entries have closed, only a replaced fixture can be re-picked, and only until it is about to kick off.
   for k in 0..4 loop
     if (new.preds->>(k::text)) is distinct from (old.preds->>(k::text)) then
       if not coalesce((fx->k->>'replaced')::boolean, false) then
