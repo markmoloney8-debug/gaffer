@@ -8,7 +8,8 @@ before(async () => { bundle = await buildApp(); browser = await launch(); });
 after(async () => { await browser.close(); });
 
 const R = (...r) => r.map(result => ({ result, score: result === "upcoming" || result === "void" ? null : "1-0" }));
-const seeEntry = (u, g, name, ...p) => ({ username: u, group_id: g, entry_name: name, preds: picks(...p), submitted_at: new Date().toISOString() });
+let entrySeq = 0;
+const seeEntry = (u, g, name, ...p) => ({ id: `seed-${++entrySeq}`, username: u, group_id: g, entry_name: name, preds: picks(...p), submitted_at: new Date().toISOString() });
 
 async function world(opts) {
   const w = await newWorld(browser, bundle, opts);
@@ -25,7 +26,7 @@ async function run(opts, body) {
 async function sealEntry(w, ...p) {
   const label = { home: "Home Win", draw: "Draw", away: "Away Win" };
   for (let i = 0; i < 5; i++) await w.page.locator(`button:has-text("${label[p[i]]}")`).nth(i).click();
-  await w.click(/Seal This Entry/);
+  await w.click(/Save Entry/);
 }
 
 // ── Sign-up and groups ─────────────────────────────────────────────────────
@@ -85,7 +86,7 @@ test("the Seal button stays disabled until all five matches are picked", async (
   await run({ loginAs: "ann" }, async w => {
     await w.click(/My Predictions/);
     await w.click(/Add Entry/);
-    const seal = w.page.getByRole("button", { name: /Seal This Entry/ });
+    const seal = w.page.getByRole("button", { name: /Save Entry/ });
     assert.equal(await seal.isDisabled(), true);
     for (let i = 0; i < 4; i++) await w.page.locator('button:has-text("Draw")').nth(i).click();
     assert.equal(await seal.isDisabled(), true);
@@ -784,19 +785,40 @@ test("help: new visitors can read how to play on the sign-in page; players can o
   });
 });
 
-test("all-time record: wins and entries per player across every run, sortable", async () => {
+test("all-time record: wins, entries, each winner's share of the pot, and net, sortable", async () => {
   const h = (series, week, u, correct, perfect = false) => ({ group_id: "g-alpha", series, week, username: u, entry_name: "Entry 1", correct, total: 5, perfect });
-  const setup = t => t.history.push(h(1, 1, "bob", 5, true), h(1, 1, "bob", 2), h(1, 1, "ann", 5, true), h(1, 2, "ann", 3), h(2, 1, "bob", 5, true), h(2, 1, "bob", 5, true), h(2, 1, "ann", 1));
+  // Run 1: 4 entries in the pot (bob 2, ann 2); bob and ann both get 5 in week 2, so 2 each.
+  // Run 2: 3 entries in the pot; only bob wins (with two perfect entries, still one winner), so he takes all 3.
+  const setup = t => t.history.push(h(1, 1, "bob", 2), h(1, 2, "bob", 5, true), h(1, 2, "ann", 5, true), h(1, 2, "ann", 3), h(2, 1, "bob", 5, true), h(2, 1, "bob", 5, true), h(2, 1, "ann", 1));
   await run({ loginAs: "ann", setup }, async w => {
     await w.click(/The Story So Far/);
     await w.text("All-time record");
     const rows = () => w.page.locator("table").first().locator("tbody tr").evaluateAll(rs => rs.map(r => [...r.querySelectorAll("td")].map(c => c.innerText.trim().split("\n").pop())));
-    // bob: 4 entries in 2 winning weeks (two perfect entries in one week count as ONE win); ann: 3 entries, 1 win
-    const r = await rows();
-    assert.deepEqual(r[0], ["bob", "2", "4", "2"]);
-    assert.deepEqual(r[1], ["ann", "1", "3", "3"]);
-    await w.click("Sort record by Entries per win");
-    assert.equal((await rows())[0][0], "bob", "fewest entries per win first");
+    assert.deepEqual(await rows(), [["bob", "2", "4", "5", "+1"], ["ann", "1", "3", "2", "-1"]]);
+    await w.click("Sort record by Net");
+    assert.equal((await rows())[0][0], "bob", "biggest net first");
+    await w.click("Sort record by Net");
+    assert.equal((await rows())[0][0], "ann", "then smallest first");
+    await w.click("Sort record by Entries won");
+    assert.equal((await rows())[0][0], "bob");
+  });
+});
+
+test("a pot with 50 entries and 2 winners pays 25 each; unwon entries stay in the pot for the next win", async () => {
+  const h = (series, week, u, perfect) => ({ group_id: "g-alpha", series, week, username: u, entry_name: "E", correct: perfect ? 5 : 1, total: 5, perfect });
+  const rowsIn = [];
+  for (let i = 0; i < 24; i++) rowsIn.push(h(1, 1, "ann", false));      // week 1: nobody wins, 24 + 6 entries go into the pot
+  for (let i = 0; i < 6; i++) rowsIn.push(h(1, 1, "cat", false));
+  for (let i = 0; i < 18; i++) rowsIn.push(h(1, 2, "ann", false));      // week 2 adds 20 more entries (18 + two perfect ones)
+  rowsIn.push(h(1, 2, "ann", true), h(1, 2, "bob", true));
+  await run({ loginAs: "ann", setup: t => t.history.push(...rowsIn) }, async w => {
+    await w.click(/The Story So Far/);
+    const rows = await w.page.locator("table").first().locator("tbody tr").evaluateAll(rs => rs.map(r => [...r.querySelectorAll("td")].map(c => c.innerText.trim().split("\n").pop())));
+    const by = n => rows.find(r => r[0] === n);
+    assert.deepEqual(by("ann").slice(1, 4), ["1", "43", "25"], "50 entries, 2 winners: 25 each");
+    assert.deepEqual(by("bob").slice(1, 4), ["1", "1", "25"]);
+    assert.deepEqual(by("cat").slice(1, 4), ["0", "6", "0"]);
+    assert.equal(by("bob")[4], "+24");
   });
 });
 
@@ -828,7 +850,7 @@ test("an entry identical to one you already made is blocked with a warning; chan
     await w.click(/Add Entry/);
     for (const [i, k] of ["Home Win", "Draw", "Away Win", "Home Win", "Draw"].entries()) await w.page.locator(`button:has-text("${k}")`).nth(i).click();
     await w.text("exactly the same as Entry 1");
-    const seal = w.page.getByRole("button", { name: /Seal This Entry/ });
+    const seal = w.page.getByRole("button", { name: /Save Entry/ });
     assert.equal(await seal.isDisabled(), true);
     await w.page.locator('button:has-text("Away Win")').nth(4).click();      // change the last pick
     assert.equal(await w.page.getByText("exactly the same as").count(), 0);
@@ -865,5 +887,70 @@ test("round dates replace 'Week N' on the entry screens, and the group banner is
     const bannerTop = await w.page.getByRole("status").filter({ hasText: "Playing in" }).first().evaluate(e => e.getBoundingClientRect().top);
     const navBottom = await w.page.locator("div").filter({ hasText: /^⚽ THE GAFFER/ }).first().evaluate(e => { let n = e; while (n && getComputedStyle(n).position !== "fixed") n = n.parentElement; return n ? n.getBoundingClientRect().bottom : 0; });
     assert.ok(bannerTop >= navBottom - 1, `banner (${bannerTop}) must sit below the top bar (${navBottom})`);
+  });
+});
+
+test("the group dropdown is wide enough for a full group name on a desktop screen", async () => {
+  const setup = t => { t.groups.push({ id: "g-long", name: "Friday Night Pub League", invite_code: "LONGONE1", emoji: null }); t.memberships.push({ username: "ann", group_id: "g-long" }); t.group_state.push({ group_id: "g-long", series: 1, winners_found: false }); };
+  await run({ loginAs: "ann", setup }, async w => {
+    await w.page.setViewportSize({ width: 1280, height: 800 });
+    const sel = w.page.locator("select").first();
+    await sel.selectOption("g-long");
+    const { box, scroll } = await sel.evaluate(e => ({ box: e.getBoundingClientRect().width, scroll: e.scrollWidth }));
+    assert.ok(box > 130 && scroll <= box + 2, `the name fits without being cut off (box ${box}, text ${scroll})`);
+  });
+});
+
+// ── Editing entries until the deadline ─────────────────────────────────────
+const mine = w => w.tables.submissions.filter(s => s.username === "ann" && s.group_id === "g-alpha");
+
+test("an entry can be edited before entries lock: picks change, the entry count does not", async () => {
+  const setup = t => t.submissions.push(seeEntry("ann", "g-alpha", "Entry 1", "home", "draw", "away", "home", "draw"));
+  await run({ loginAs: "ann", setup }, async w => {
+    await w.click(/My Predictions/);
+    await w.click("Edit Entry 1");
+    await w.text("Edit Entry");
+    const save = w.page.getByRole("button", { name: /No changes yet|Save changes/ });
+    assert.equal(await save.isDisabled(), true, "nothing to save until a pick changes");
+    await w.page.locator('button:has-text("Away Win")').nth(0).click();          // first match: home -> away
+    await w.click(/Save changes/);
+    await w.text("Entry updated");
+    assert.equal(mine(w).length, 1);
+    assert.equal(mine(w)[0].preds[0], "away");
+    assert.equal(mine(w)[0].preds[1], "draw", "the other picks are untouched");
+    await w.text(`${w.tables.round[0].fixtures[0].away} win`);                  // the list shows the new pick
+  });
+});
+
+test("editing is still possible when all five entries are used, and cannot copy another entry", async () => {
+  const combos = [["home","home"],["home","draw"],["home","away"],["draw","home"],["draw","draw"]];
+  const setup = t => combos.forEach(([a, b], i) => t.submissions.push(seeEntry("ann", "g-alpha", `Entry ${i + 1}`, "home", "draw", "away", a, b)));
+  await run({ loginAs: "ann", setup }, async w => {
+    await w.click(/My Predictions/);
+    assert.equal(await w.page.getByRole("button", { name: /Add Entry/ }).count(), 0, "no slot left");
+    await w.click("Edit Entry 5");                                               // currently draw/draw
+    await w.page.locator('button:has-text("Home Win")').nth(3).click();
+    await w.page.locator('button:has-text("Home Win")').nth(4).click();          // now identical to Entry 1
+    await w.text("exactly the same as Entry 1");
+    assert.equal(await w.page.getByRole("button", { name: /Save changes/ }).isDisabled(), true);
+    await w.page.locator('button:has-text("Away Win")').nth(4).click();          // home/away: not used by any other entry
+    await w.page.locator('button:has-text("Away Win")').nth(3).click();          // away/away
+    await w.click(/Save changes/);
+    await w.text("Entry updated");
+    assert.deepEqual([mine(w)[4].preds[3], mine(w)[4].preds[4]], ["away", "away"]);
+  });
+});
+
+test("backing out of an edit changes nothing, and a new entry afterwards starts empty", async () => {
+  const setup = t => t.submissions.push(seeEntry("ann", "g-alpha", "Entry 1", "home", "draw", "away", "home", "draw"));
+  await run({ loginAs: "ann", setup }, async w => {
+    await w.click(/My Predictions/);
+    await w.click("Edit Entry 1");
+    await w.page.locator('button:has-text("Away Win")').nth(0).click();
+    await w.click(/Back/);
+    assert.equal(mine(w)[0].preds[0], "home");
+    await w.click(/Add Entry/);
+    await w.text("New Entry");
+    assert.equal(await w.page.getByText("0/5 picked").count(), 1);
   });
 });
