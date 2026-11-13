@@ -88,6 +88,17 @@ const AVATAR_COLORS = ["#f0c040","#34d399","#60a5fa","#a78bfa","#f472b6","#fb923
 const GROUP_EMOJIS  = ["","⚽","🏆","🔥","🍺","🦁","🐯","🚀","🎯","👑","🍀","⭐","🧠","🎩"];
 // Each group gets its own colour so it's obvious at a glance which one you're playing in.
 const groupHue = id => { let h = 0; for (const c of String(id || "")) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+// "Sat 14 Nov" or "Fri 13 – Sun 15 Nov": the dates a round's matches are played on (UK time).
+// Weeks are numbered across the whole game, so dates are clearer than "Week 3" for a group that has only just started.
+function roundDates(round) {
+  const ts = ((round && round.fixtures) || []).map(f=>f.kickoffTs).filter(Number.isFinite);
+  if (!ts.length) return round ? `Week ${round.week}` : "";
+  const fmt = (t, o) => new Intl.DateTimeFormat("en-GB", { timeZone:"Europe/London", ...o }).format(new Date(t));
+  const a = Math.min(...ts), b = Math.max(...ts);
+  const day = t => fmt(t, { weekday:"short", day:"numeric" }), full = t => fmt(t, { weekday:"short", day:"numeric", month:"short" });
+  if (fmt(a,{day:"numeric",month:"short",year:"numeric"}) === fmt(b,{day:"numeric",month:"short",year:"numeric"})) return full(a);
+  return fmt(a,{month:"short"}) === fmt(b,{month:"short"}) ? `${day(a)} – ${full(b)}` : `${full(a)} – ${full(b)}`;
+}
 const gLabel = g => g ? `${g.emoji ? g.emoji + " " : ""}${g.name}` : "";
 const ProfilesCtx = createContext({});
 
@@ -958,7 +969,7 @@ export default function App() {
       {showPin&&<PinModal onSuccess={onPinSuccess} onCancel={()=>setShowPin(false)}/>}
 
       {/* Nav */}
-      <div style={S.nav}>
+      <div style={{...S.nav,...(myGroups.length>1&&groupId?{borderBottom:`3px solid hsl(${groupHue(groupId)} 65% 52%)`}:{})}}>
         <div style={S.navLogo} onClick={()=>setView("home")}>⚽ THE GAFFER</div>
         <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
           <Avatar name={username} size={24}/>
@@ -978,9 +989,8 @@ export default function App() {
       {myGroups.length>1&&groupId&&["home","submit","lobby","story","reveal"].includes(view)&&(()=>{
         const h = groupHue(groupId);
         return (
-          <div role="status" aria-label={`Playing in ${groupName}`} style={{display:"flex",justifyContent:"center",padding:"10px 16px 0"}}>
-            <div style={{display:"inline-flex",alignItems:"center",gap:8,padding:"6px 16px",borderRadius:999,fontSize:14,fontWeight:700,
-              border:`2px solid hsl(${h} 65% 52%)`,background:`hsl(${h} 65% 52% / 0.16)`,color:"var(--text)",maxWidth:"100%"}}>
+          <div role="status" aria-label={`Playing in ${groupName}`} style={{display:"flex",justifyContent:"center",padding:"8px 16px",marginTop:56,marginBottom:-34,background:`hsl(${h} 65% 52% / 0.2)`,borderBottom:`3px solid hsl(${h} 65% 52%)`}}>
+            <div style={{display:"inline-flex",alignItems:"center",gap:8,fontSize:16,fontWeight:800,color:"var(--text)",maxWidth:"100%"}}>
               <span style={{fontSize:11,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",color:"var(--muted)"}}>Playing in</span>
               <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{groupName}</span>
             </div>
@@ -995,6 +1005,8 @@ export default function App() {
             <div style={{fontSize:52,marginBottom:8}}>⚽</div>
             <div style={S.bigTitle}>THE GAFFER</div>
             <div style={S.bigSub}>Weekly Football Prediction League</div>
+            {groupName&&<div style={{marginTop:12,display:"inline-block",padding:"6px 18px",borderRadius:999,fontSize:18,fontWeight:800,color:"var(--text)",
+              border:`2px solid hsl(${groupHue(groupId)} 65% 52%)`,background:`hsl(${groupHue(groupId)} 65% 52% / 0.18)`}}>{groupName}</div>}
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:10,width:"100%",maxWidth:360}}>
             <Btn gold onClick={()=>{setEntryView("list");setView("submit");}} disabled={!round||round.locked||deadlineLocked}>
@@ -1012,7 +1024,7 @@ export default function App() {
               {groupName&&<><span style={{fontWeight:600}}>{groupName}</span><span style={{color:"var(--muted)",margin:"0 8px"}}>·</span></>}
               <span style={{color:"var(--gold)",fontWeight:600}}>{round.league.flag} {round.league.name}</span>
               <span style={{color:"var(--muted)",margin:"0 8px"}}>·</span>
-              <span style={{color:"var(--muted)"}}>Week {round.week}</span>
+              <span style={{color:"var(--muted)"}}>{roundDates(round)}</span>
               <span style={{color:"var(--muted)",margin:"0 8px"}}>·</span>
               <span style={{color:"var(--muted)"}}>{subs.length} entr{subs.length!==1?"ies":"y"}</span>
               {(round.locked||deadlineLocked)&&<span style={{color:"var(--red)",marginLeft:8,fontSize:11}}>🔒 Locked</span>}
@@ -1041,7 +1053,7 @@ export default function App() {
             {round ? (
               <>
                 <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--gold)",marginBottom:4}}>
-                  {round.league.flag} {round.league.name} — Week {round.week}
+                  {round.league.flag} {round.league.name} — {roundDates(round)}
                 </div>
                 <div style={{fontSize:13,color:"var(--muted)",marginBottom:12}}>
                   {subs.length} entr{subs.length!==1?"ies":"y"} · {round.locked?"🔒 Locked":"🟢 Open"}
@@ -1195,7 +1207,7 @@ export default function App() {
       {view==="submit"&&round&&!round.locked&&!deadlineLocked&&entryView==="list"&&(
         <Screen wide>
           <BackBtn onClick={()=>setView("home")}/>
-          <SectionTitle eyebrow={`${round.league.flag} ${round.league.name} · Week ${round.week}`} title="My Entries" sub={`${myEntries.length} / ${MAX_ENTRIES} entries used`}/>
+          <SectionTitle eyebrow={`${round.league.flag} ${round.league.name} · ${roundDates(round)}`} title="My Entries" sub={`${myEntries.length} / ${MAX_ENTRIES} entries used`}/>
           {myEntries.length>0&&(
             <div style={{width:"100%",marginBottom:8}}>
               {myEntries.map((e,i)=>(
@@ -1282,7 +1294,7 @@ export default function App() {
         <Screen wide>
           <BackBtn onClick={()=>setView("home")}/>
           <SectionTitle
-            eyebrow={`${round.league.flag} ${round.league.name} · Week ${round.week}`}
+            eyebrow={`${round.league.flag} ${round.league.name} · ${roundDates(round)}`}
             title={round.winnersFound?"Round Complete 🏆":"The Lobby"}
             sub={`${subs.length} entr${subs.length!==1?"ies":"y"} across ${new Set(subs.map(s=>s.username)).size} player${new Set(subs.map(s=>s.username)).size!==1?"s":""}`}
           />
@@ -1705,7 +1717,7 @@ function RevealView({ round, results, subs, onRevealComplete, onHome, onLobby, r
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",width:"100%",marginBottom:20}}>
         <button style={S.backBtnInline} onClick={onHome}>← Home</button>
         <div style={{fontFamily:"'Bebas Neue',sans-serif",color:"var(--gold)",letterSpacing:2,fontSize:17}}>
-          {round.league.flag} {round.league.name} · Week {round.week}
+          {round.league.flag} {round.league.name} · {roundDates(round)}
         </div>
         <div style={{width:60}}/>
       </div>
