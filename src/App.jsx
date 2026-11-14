@@ -84,6 +84,9 @@ const OUTCOMES = [
 
 // ─── Avatars, group badges ────────────────────────────────────────────────────
 const AVATAR_EMOJIS = ["⚽","🏆","🥅","🧤","👟","⛳","🎯","🥊","🧢","🎩","🕶️","👑","🦁","🐺","🦅","🦈","🐂","🔥","⚡","🏎️","🎸","🍺","🥃","☕"];
+// Crest avatars: stored as "i:<name>" (short, so it fits the avatar column) and drawn from /avatars/<name>.png
+const AVATAR_CRESTS = [["i:lion","Lion"],["i:eagle","Eagle"],["i:bull","Bull"],["i:wolf","Wolf"],["i:horse","Stallion"],["i:shark","Shark"],["i:dragon","Dragon"],["i:bear","Bear"],["i:ele","Elephant"],["i:pan","Panther"],["i:gor","Gorilla"],["i:rhino","Rhino"],["i:hammer","Hammer"],["i:dog","Mastiff"],["i:skull","Skull"],["i:anchor","Anchor"],["i:anvil","Anvil"],["i:flame","Flame"]];
+const crestSrc = v => `/avatars/${String(v).slice(2)}.png`;
 const AVATAR_COLORS = ["#f0c040","#34d399","#60a5fa","#a78bfa","#f472b6","#fb923c","#f87171","#94a3b8"];
 const GROUP_EMOJIS  = ["","⚽","🏆","🔥","🍺","🦁","🐯","🚀","🎯","👑","🍀","⭐","🧠","🎩"];
 // Each group gets its own colour so it's obvious at a glance which one you're playing in.
@@ -124,8 +127,12 @@ function FormRow({ f }) {
     </div>
   );
 }
+// Menu icons (public/icons/<name>.png). Decorative: the button text carries the meaning.
+const Ico = ({ n, size = 24 }) => <img src={`/icons/${n}.png`} alt="" width={size} height={size} style={{verticalAlign:"middle",marginRight:8,borderRadius:"50%"}}/>;
+const Crest = ({ size = 96, mb = 8 }) => <img src="/logo.png" alt="" height={size} style={{height:size,width:"auto",marginBottom:mb}}/>;
 function AvatarBubble({ emoji, color, initial, size = 28 }) {
   const base = { width:size, height:size, borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 };
+  if (emoji && String(emoji).startsWith("i:")) return <img src={crestSrc(emoji)} alt="" width={size} height={size} style={{ ...base, objectFit:"cover" }}/>;
   if (emoji) return <div style={{ ...base, background: color || "var(--gold)", fontSize: Math.round(size*0.55), lineHeight:1 }}>{emoji}</div>;
   return <div style={{ ...S.playerAvatar, width:size, height:size, fontSize: Math.round(size*0.43) }}>{initial}</div>;
 }
@@ -411,7 +418,7 @@ const FAQ = [
   ["Why can't I see everyone else's picks?", "They stay hidden until entries lock, so nobody can copy. After the lock, picks are revealed in stages."],
   ["Who wins?", "Anyone who gets all 5 right in a week. Nobody gets 5? The run carries on and the entries keep adding up."],
   ["How do I invite friends or start my own group?", "Tap My Groups on the home screen. There you can share an invite link for your group, or create a new group of your own (up to 3)."],
-  ["I forgot my password.", "On the sign-in page tap Forgot password?, type your username and send the request. The admin will set you a temporary password. You can change it on your profile."],
+  ["I forgot my password.", "On the sign-in page tap Forgot password? and type your username. If you added and confirmed a recovery email on your profile, we email you a reset link. If not, send a request and the admin will set you a temporary password. You can change it on your profile."],
   ["Which games count?", "Five randomly selected Premier League fixtures each week. Results are collected automatically."],
 ];
 function HelpContent() {
@@ -436,6 +443,59 @@ function HelpContent() {
   );
 }
 
+// ─── Screens opened from an emailed link: ?reset=… (choose a new password) and ?verify=… (confirm an email) ──
+function LinkScreen({ link, onDone, theme, toggleTheme }) {
+  const [pw,setPw]=useState(""); const [cpw,setCpw]=useState("");
+  const [state,setState]=useState(link.type==="verify"?"working":"form");   // working | form | done | bad
+  const [msg,setMsg]=useState("");
+  useEffect(() => {
+    if (link.type !== "verify") return;
+    let live = true;
+    accountCall("verify_email", { token: link.token })
+      .then(r => { if (!live) return; if (r.ok) setState("done"); else { setMsg((r.json&&r.json.error)||"Couldn't confirm that email."); setState("bad"); } })
+      .catch(() => { if (live) { setMsg("Connection error — check your internet and open the link again."); setState("bad"); } });
+    return () => { live = false; };
+  }, []);
+  async function save() {
+    setMsg("");
+    if (pw.length < 6) { setMsg("Password must be at least 6 characters."); return; }
+    if (pw !== cpw)    { setMsg("Passwords don't match."); return; }
+    setState("working");
+    try {
+      const r = await accountCall("complete_reset", { token: link.token, password: pw });
+      if (r.ok) { setState("done"); return; }
+      setMsg((r.json&&r.json.error)||"Couldn't change the password."); setState(r.json&&r.json.code==="bad_token"?"bad":"form");
+    } catch { setMsg("Connection error — try again."); setState("form"); }
+  }
+  const isReset = link.type === "reset";
+  return (
+    <Screen>
+      <button onClick={toggleTheme} aria-label="Switch between light and dark mode" style={{...S.navBtn,position:"fixed",top:12,right:16}}>{theme==="dark"?"☀️":"🌙"}</button>
+      <div style={S.bigLogo}><Crest size={96}/><div style={S.bigTitle}>THE GAFFER</div></div>
+      <div style={{...S.card,width:"100%",maxWidth:380,display:"flex",flexDirection:"column",gap:12,textAlign:"center"}}>
+        {state==="working"&&<Loader msg={isReset?"Saving…":"Confirming your email…"}/>}
+        {state==="form"&&<>
+          <div style={{fontSize:16,fontWeight:700}}>Choose a new password</div>
+          <Field label="New password"><input style={S.input} type="password" autoComplete="new-password" value={pw} onChange={e=>setPw(e.target.value)} placeholder="At least 6 characters"/></Field>
+          <Field label="Confirm password"><input style={S.input} type="password" autoComplete="new-password" value={cpw} onChange={e=>setCpw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&save()} placeholder="••••••••"/></Field>
+          {msg&&<ErrorBox>{msg}</ErrorBox>}
+          <Btn gold onClick={save}>Set new password →</Btn>
+        </>}
+        {state==="done"&&<>
+          <div role="status" style={{fontSize:16,fontWeight:700}}>{isReset?"✅ Password changed":"✅ Email confirmed"}</div>
+          <div style={{fontSize:13,color:"var(--muted)",lineHeight:1.5}}>{isReset?"Sign in with your new password.":"If you ever forget your password you can now reset it yourself from the sign-in page."}</div>
+          <Btn gold onClick={onDone}>{isReset?"Go to sign in →":"Continue →"}</Btn>
+        </>}
+        {state==="bad"&&<>
+          <ErrorBox>{msg||"This link has expired or has already been used."}</ErrorBox>
+          <div style={{fontSize:13,color:"var(--muted)",lineHeight:1.5}}>{isReset?"Links only work once and last 30 minutes. Ask for a new one from the sign-in page.":"Add your email again from your profile to get a new link."}</div>
+          <Btn onClick={onDone}>Back to the app</Btn>
+        </>}
+      </div>
+    </Screen>
+  );
+}
+
 // ─── Auth Screen ──────────────────────────────────────────────────────────────
 function AuthScreen({ onLogin, theme, toggleTheme }) {
   const [tab,setTab]=useState(() => { try { return new URLSearchParams(window.location.search).get("join") ? "register" : "login"; } catch { return "login"; } });
@@ -444,7 +504,7 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
   const [cpw,setCpw]=useState(""); const [inv,setInv]=useState(joinParam);
   const [err,setErr]=useState(""); const [loading,setLoading]=useState(false);
   const [showHelp,setShowHelp]=useState(false);
-  const [forgot,setForgot]=useState(false); const [resetNote,setResetNote]=useState(""); const [note,setNote]=useState("");
+  const [email,setEmail]=useState(""); const [forgot,setForgot]=useState(false); const [resetNote,setResetNote]=useState(""); const [note,setNote]=useState("");
 
   async function login() {
     setErr(""); setLoading(true);
@@ -474,7 +534,7 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
     if (pw.length<6)                             { setErr("Password must be at least 6 characters."); setLoading(false); return; }
     if (pw!==cpw)                                { setErr("Passwords don't match."); setLoading(false); return; }
     try {
-      const r = await accountCall("register", { username: trimmed, password: pw, invite: inv.trim().toUpperCase() });
+      const r = await accountCall("register", { username: trimmed, password: pw, invite: inv.trim().toUpperCase(), email: email.trim() });
       if (!r.ok) { setErr((r.json && r.json.error) || "Couldn't create the account. Try again."); setLoading(false); return; }
       const si = await auth.signIn(trimmed, pw);
       if (!si.ok) { setErr("Account created. Please sign in."); setTab("login"); setLoading(false); return; }
@@ -484,6 +544,18 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
     setLoading(false);
   }
 
+  async function sendResetLink() {
+    setErr(""); setNote("");
+    const name = u.trim();
+    if (!name) { setErr("Type your username first."); return; }
+    setLoading(true);
+    try {
+      const r = await accountCall("request_reset", { username: name });
+      if (r.ok) setNote("If that username has a confirmed recovery email, a reset link is on its way. It lasts 30 minutes, so check your spam folder too.");
+      else setErr("Couldn't send that right now. Try again in a minute.");
+    } catch { setErr("Connection error — check your internet."); }
+    setLoading(false);
+  }
   async function sendResetRequest() {
     setErr(""); setNote("");
     const name = u.trim();
@@ -507,7 +579,7 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
         {theme==="dark"?"☀️":"🌙"}
       </button>
       <div style={S.bigLogo}>
-        <div style={{fontSize:56,marginBottom:8}}>⚽</div>
+        <Crest size={104}/>
         <div style={S.bigTitle}>THE GAFFER</div>
         <div style={S.bigSub}>Weekly Football Prediction League</div>
       </div>
@@ -526,6 +598,7 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
         {tab==="register"&&<>
           <div style={{fontSize:11,color:"var(--muted)",lineHeight:1.5,marginTop:-4}}>🔒 Use a password you don't use anywhere else. This is a fun game, not a bank.</div>
           <Field label="Confirm Password"><input style={S.input} type="password" value={cpw} onChange={e=>setCpw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} placeholder="••••••••"/></Field>
+          <Field label="Email (optional)"><input style={S.input} type="email" autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Only used to reset your password"/></Field>
           <Field label="Invite Code"><input style={S.input} value={inv} onChange={e=>setInv(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} placeholder="Ask the admin" autoCapitalize="characters"/></Field>
         </>}
         {err&&<ErrorBox>{err}</ErrorBox>}
@@ -535,7 +608,9 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
         <button onClick={()=>setShowHelp(h=>!h)} aria-expanded={showHelp} style={{background:"none",border:"none",color:"var(--muted)",fontSize:12,textDecoration:"underline",padding:4}}>{showHelp?"Hide help":"How does this work?"}</button>
         {tab==="login"&&!forgot&&<button onClick={()=>{setForgot(true);setErr("");setNote("");}} style={{background:"none",border:"none",color:"var(--muted)",fontSize:12,textDecoration:"underline",padding:4}}>Forgot password?</button>}
         {tab==="login"&&forgot&&<div style={{...S.card,display:"flex",flexDirection:"column",gap:8}}>
-          <div style={{fontSize:12,color:"var(--muted)",lineHeight:1.5}}>Type your username above, then send a request. The admin will set you a temporary password and tell you what it is. You can change it once you're in.</div>
+          <div style={{fontSize:12,color:"var(--muted)",lineHeight:1.5}}>Type your username above, then we'll email you a reset link, as long as you've added and confirmed a recovery email on your profile.</div>
+          <Btn gold onClick={sendResetLink} disabled={loading}>Email me a reset link</Btn>
+          <div style={{fontSize:12,color:"var(--muted)",lineHeight:1.5,marginTop:6}}>No recovery email? Ask the admin instead. They'll set you a temporary password and tell you what it is.</div>
           <Field label="Message for the admin (optional)"><input style={S.input} value={resetNote} onChange={e=>setResetNote(e.target.value)} maxLength={300} placeholder="e.g. I'm Dave, Pete's mate from the pub league"/></Field>
           <Btn onClick={sendResetRequest} disabled={loading}>Send reset request</Btn>
         </div>}
@@ -582,6 +657,10 @@ export default function App() {
   const [tempPw,     setTempPw]     = useState(null);   // { username, tempPassword } shown once to the admin
   const [newPw,      setNewPw]      = useState("");
   const [pwNote,     setPwNote]     = useState("");
+  const [recovery,   setRecovery]   = useState(null);   // { email, verified } for the signed-in player
+  const [emailInput, setEmailInput] = useState("");
+  const [emailNote,  setEmailNote]  = useState("");
+  const [emailErr,   setEmailErr]   = useState("");
   const [groups,    setGroups]    = useState([]);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupCode, setNewGroupCode] = useState("");
@@ -625,6 +704,16 @@ export default function App() {
     } catch {}
   }, [username, appReady]);
   const toggleTheme = () => setTheme(t => t === "dark" ? "light" : "dark");
+  // A reset or confirmation link from an email. The token is kept in memory and removed from the address bar straight away.
+  const [emailLink, setEmailLink] = useState(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      if (p.get("reset"))  return { type: "reset",  token: p.get("reset") };
+      if (p.get("verify")) return { type: "verify", token: p.get("verify") };
+    } catch {}
+    return null;
+  });
+  useEffect(() => { if (emailLink) try { window.history.replaceState({}, "", window.location.pathname); } catch {} }, []);
   useEffect(() => { onAuthLost = () => { session.clear(); setUsername(null); setIsAdmin(false); setView("home"); }; return () => { onAuthLost = () => {}; }; }, []);
 
   // ── Player avatars ────────────────────────────────────────────────────────
@@ -640,7 +729,8 @@ export default function App() {
     const me = profiles[username] || {};
     setProfAvatar(me.avatar || "");
     setProfColor(me.avatar_color || AVATAR_COLORS[0]);
-    setError(""); setMyStats(null); setView("profile");
+    setError(""); setMyStats(null); setEmailNote(""); setEmailErr(""); setEmailInput(""); setView("profile");
+    sb.rpc("my_recovery").then(rows => setRecovery((rows && rows[0] && rows[0].email) ? rows[0] : { email: null, verified: false })).catch(() => setRecovery({ email: null, verified: false }));
     sb.get("history", `username=eq.${encodeURIComponent(username)}&select=correct,total,perfect`)
       .then(rows => setMyStats(profileStats(rows))).catch(() => setMyStats(profileStats([])));
   }
@@ -700,6 +790,33 @@ export default function App() {
   }
   async function dismissReset(id) {
     try { await sb.patch("reset_requests", `id=eq.${id}`, { status: "dismissed" }); await loadResets(); } catch { setError("Couldn't update that request."); }
+  }
+  async function saveRecoveryEmail(addr) {
+    setEmailNote(""); setEmailErr("");
+    const email = String(addr || "").trim();
+    if (!email) { setEmailErr("Type your email address first."); return; }
+    try {
+      const r = await accountCall("set_email", { email });
+      if (!r.ok) { setEmailErr((r.json && r.json.error) || "Couldn't save that email."); return; }
+      setRecovery(r.json.alreadyVerified ? { email: email.toLowerCase(), verified: true } : { email: email.toLowerCase(), verified: false });
+      setEmailInput("");
+      setEmailNote(r.json.alreadyVerified ? "That email is already confirmed." : `We've sent a confirmation link to ${email.toLowerCase()}. Tap it to switch on password resets.`);
+    } catch { setEmailErr("Connection error — try again."); }
+  }
+  async function resendRecoveryEmail() {
+    setEmailNote(""); setEmailErr("");
+    try {
+      const r = await accountCall("resend_email", {});
+      if (r.ok) setEmailNote("We've sent the confirmation link again."); else setEmailErr((r.json && r.json.error) || "Couldn't send it. Try again.");
+    } catch { setEmailErr("Connection error — try again."); }
+  }
+  async function removeRecoveryEmail() {
+    setEmailNote(""); setEmailErr("");
+    try {
+      const r = await accountCall("remove_email", {});
+      if (!r.ok) { setEmailErr("Couldn't remove it. Try again."); return; }
+      setRecovery({ email: null, verified: false }); setEmailNote("Your email has been removed.");
+    } catch { setEmailErr("Connection error — try again."); }
   }
   async function saveNewPassword() {
     setPwNote(""); setError("");
@@ -955,6 +1072,7 @@ export default function App() {
   }
 
   // ── Not logged in ─────────────────────────────────────────────────────────
+  if (emailLink) return <LinkScreen link={emailLink} onDone={()=>setEmailLink(null)} theme={theme} toggleTheme={toggleTheme}/>;
   if (!username) return <AuthScreen onLogin={u=>setUsername(u)} theme={theme} toggleTheme={toggleTheme}/>;
 
   // ── Loading initial data ───────────────────────────────────────────────────
@@ -973,7 +1091,7 @@ export default function App() {
 
       {/* Nav */}
       <div style={{...S.nav,...(myGroups.length>1&&groupId?{borderBottom:`3px solid hsl(${groupHue(groupId)} 65% 52%)`}:{})}}>
-        <div style={S.navLogo} onClick={()=>setView("home")}>⚽ THE GAFFER</div>
+        <div style={S.navLogo} onClick={()=>setView("home")}><img src="/favicon-48.png" alt="" width={18} height={18} style={{verticalAlign:"middle",marginRight:5}}/>THE GAFFER</div>
         <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
           <Avatar name={username} size={24}/>
           <span style={{fontSize:13,color:"var(--muted)",maxWidth:110,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{username}{myGroups.length===1&&groupName?` · ${groupName}`:""}</span>
@@ -1005,7 +1123,7 @@ export default function App() {
       {view==="home"&&(
         <Screen>
           <div style={S.bigLogo}>
-            <div style={{fontSize:52,marginBottom:8}}>⚽</div>
+            <Crest size={104}/>
             <div style={S.bigTitle}>THE GAFFER</div>
             <div style={S.bigSub}>Weekly Football Prediction League</div>
             {groupName&&<div style={{marginTop:12,display:"inline-block",padding:"6px 18px",borderRadius:999,fontSize:18,fontWeight:800,color:"var(--text)",
@@ -1013,14 +1131,14 @@ export default function App() {
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:10,width:"100%",maxWidth:360}}>
             <Btn gold onClick={()=>{setEntryView("list");setView("submit");}} disabled={!round||round.locked||deadlineLocked}>
-              ✏️ My Predictions
+              <Ico n="predict"/>My Predictions
             </Btn>
-            <Btn onClick={()=>setView("lobby")} disabled={!round}>👥 Lobby</Btn>
-            <Btn onClick={openStory}>📊 The Story So Far</Btn>
-            <Btn onClick={()=>{setJoinErr("");setJoinCode("");setView("join");}}>👥 My Groups</Btn>
-            <Btn onClick={openProfile}>🙂 My Profile</Btn>
-            <Btn onClick={()=>setView("help")}>❓ How to play</Btn>
-            <Btn onClick={()=>{setFbNote("");setError("");setView("feedback");}}>💬 Send feedback</Btn>
+            <Btn onClick={()=>setView("lobby")} disabled={!round}><Ico n="lobby"/>Lobby</Btn>
+            <Btn onClick={openStory}><Ico n="story"/>The Story So Far</Btn>
+            <Btn onClick={()=>{setJoinErr("");setJoinCode("");setView("join");}}><Ico n="groups"/>My Groups</Btn>
+            <Btn onClick={openProfile}><Ico n="profile"/>My Profile</Btn>
+            <Btn onClick={()=>setView("help")}><Ico n="help"/>How to play</Btn>
+            <Btn onClick={()=>{setFbNote("");setError("");setView("feedback");}}><Ico n="feedback"/>Send feedback</Btn>
           </div>
           {round?(
             <div style={S.pill}>
@@ -1037,7 +1155,7 @@ export default function App() {
             <div style={{color:"var(--muted)",fontSize:13,textAlign:"center"}}>No active round — waiting for the admin.</div>
           )}
           <button style={S.adminLink} onClick={()=>requireAdmin("admin")}>
-            {isAdmin?"⚙️ Admin Panel":"🔐 Admin"}
+            <Ico n="admin" size={18}/>{isAdmin?"Admin Panel":"Admin"}
           </button>
         </Screen>
       )}
@@ -1452,6 +1570,12 @@ export default function App() {
             <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8}}>
               <button aria-label="Use my initial" onClick={()=>setProfAvatar("")}
                 style={{...S.outcomeBtn,...(profAvatar===""?S.outcomeBtnOn:{}),fontSize:12}}>Aa</button>
+              {AVATAR_CRESTS.map(([v,label])=>(
+                <button key={v} aria-label={`Avatar ${label} crest`} onClick={()=>setProfAvatar(v)}
+                  style={{...S.outcomeBtn,...(profAvatar===v?S.outcomeBtnOn:{}),padding:4,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <img src={crestSrc(v)} alt="" width={40} height={40} style={{borderRadius:"50%"}}/>
+                </button>
+              ))}
               {AVATAR_EMOJIS.map(e=>(
                 <button key={e} aria-label={`Avatar ${e}`} onClick={()=>setProfAvatar(e)}
                   style={{...S.outcomeBtn,...(profAvatar===e?S.outcomeBtnOn:{}),fontSize:20,padding:"6px 0"}}>{e}</button>
@@ -1474,6 +1598,28 @@ export default function App() {
               <Btn onClick={saveNewPassword} disabled={!newPw}>Change</Btn>
             </div>
             {pwNote&&<div role="status" style={{fontSize:12,color:"var(--green)",marginTop:6}}>{pwNote}</div>}
+          </div>
+          <div style={{width:"100%"}} aria-label="Recovery email">
+            <div style={S.sectionLabel}>Recovery email</div>
+            <div style={{fontSize:12,color:"var(--muted)",lineHeight:1.5,marginBottom:8}}>Lets you reset your own password if you forget it. Only used for that. Other players can't see it.</div>
+            {recovery&&recovery.email&&(
+              <div style={{...S.card,marginBottom:8}}>
+                <div style={{fontSize:14,fontWeight:600,wordBreak:"break-all"}}>{recovery.email}</div>
+                <div style={{fontSize:12,marginTop:4,color:recovery.verified?"var(--green)":"var(--muted)"}}>
+                  {recovery.verified?"✅ Confirmed. You can reset your own password.":"⏳ Waiting for you to tap the link we emailed."}
+                </div>
+                <div style={{display:"flex",gap:10,marginTop:8}}>
+                  {!recovery.verified&&<Btn onClick={resendRecoveryEmail}>Send the link again</Btn>}
+                  <button style={S.dangerLink} onClick={removeRecoveryEmail}>Remove email</button>
+                </div>
+              </div>
+            )}
+            <div style={{display:"flex",gap:8}}>
+              <input style={S.input} type="email" autoComplete="email" aria-label="Recovery email address" placeholder={recovery&&recovery.email?"Use a different email":"you@example.com"} value={emailInput} onChange={e=>{setEmailInput(e.target.value);setEmailNote("");setEmailErr("");}}/>
+              <Btn onClick={()=>saveRecoveryEmail(emailInput)} disabled={!emailInput}>Save</Btn>
+            </div>
+            {emailNote&&<div role="status" style={{fontSize:12,color:"var(--green)",marginTop:6,lineHeight:1.5}}>{emailNote}</div>}
+            {emailErr&&<div role="alert" style={{fontSize:12,color:"var(--danger-text)",marginTop:6,lineHeight:1.5}}>{emailErr}</div>}
           </div>
           {error&&<ErrorBox>{error}</ErrorBox>}
           {loading?<Loader msg={loadMsg}/>:<Btn gold onClick={saveProfile}>Save profile</Btn>}
