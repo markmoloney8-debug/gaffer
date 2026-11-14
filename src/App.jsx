@@ -102,7 +102,30 @@ function roundDates(round) {
   if (fmt(a,{day:"numeric",month:"short",year:"numeric"}) === fmt(b,{day:"numeric",month:"short",year:"numeric"})) return full(a);
   return fmt(a,{month:"short"}) === fmt(b,{month:"short"}) ? `${day(a)} – ${full(b)}` : `${full(a)} – ${full(b)}`;
 }
-const gLabel = g => g ? `${g.emoji ? g.emoji + " " : ""}${g.name}` : "";
+// Group badges: stored as "b:<name>" (fits the 8-character emoji column) and drawn from /badges/<name>.png.
+// Plain-text places (dropdowns) can't show pictures, so each badge has an emoji stand-in there.
+const GROUP_BADGES = [["b:ball","Football","⚽"],["b:cup","Trophy","🏆"],["b:boots","Boots","👟"],["b:pint","Pint","🍺"],["b:fire","Fireball","🔥"],["b:crown","Crown","👑"],["b:rocket","Rocket","🚀"],["b:aim","Target","🎯"],["b:clover","Clover","🍀"],["b:bolt","Lightning","⚡"],["b:hat","Top hat","🎩"],["b:star","Star","⭐"]];
+const badgeText = v => (GROUP_BADGES.find(b => b[0] === v) || [])[2] || v;
+const gLabel = g => g ? `${g.emoji ? badgeText(g.emoji) + " " : ""}${g.name}` : "";
+function GroupMark({ emoji, size = 22 }) {
+  if (!emoji) return null;
+  if (String(emoji).startsWith("b:")) return <img src={`/badges/${String(emoji).slice(2)}.png`} alt="" width={size} height={size} style={{objectFit:"contain",verticalAlign:"middle",marginRight:6}}/>;
+  return <span style={{marginRight:6}}>{emoji}</span>;
+}
+function BadgePicker({ value, onChange, label }) {
+  const cell = on => ({ ...S.outcomeBtn, ...(on ? S.outcomeBtnOn : {}), padding:3, width:40, height:44, display:"flex", alignItems:"center", justifyContent:"center" });
+  return (
+    <div role="group" aria-label={label} style={{display:"flex",flexWrap:"wrap",gap:6}}>
+      <button type="button" aria-label={`${label}: none`} aria-pressed={!value} onClick={()=>onChange("")} style={{...cell(!value),fontSize:14}}>–</button>
+      {GROUP_BADGES.map(([v,name])=>(
+        <button type="button" key={v} aria-label={`${label}: ${name}`} aria-pressed={value===v} onClick={()=>onChange(v)} style={cell(value===v)}>
+          <img src={`/badges/${v.slice(2)}.png`} alt="" width={30} height={30} style={{objectFit:"contain"}}/>
+        </button>
+      ))}
+      {value && !GROUP_BADGES.some(b=>b[0]===value) && <span style={{alignSelf:"center",fontSize:20}} aria-label="Current emoji badge">{value}</span>}
+    </div>
+  );
+}
 const ProfilesCtx = createContext({});
 
 // Recent form chips: W / D / L, oldest to newest. Letters as well as colours, so it works without colour.
@@ -128,7 +151,7 @@ function FormRow({ f }) {
   );
 }
 // Menu icons (public/icons/<name>.png). Decorative: the button text carries the meaning.
-const Ico = ({ n, size = 24 }) => <img src={`/icons/${n}.png`} alt="" width={size} height={size} style={{verticalAlign:"middle",marginRight:8,borderRadius:"50%"}}/>;
+const Ico = ({ n, size = 24, mr = 8 }) => <img src={`/icons/${n}.png`} alt="" width={size} height={size} style={{verticalAlign:"middle",marginRight:mr,objectFit:"contain"}}/>;
 const Crest = ({ size = 96, mb = 8 }) => <img src="/logo.png" alt="" height={size} style={{height:size,width:"auto",marginBottom:mb}}/>;
 function AvatarBubble({ emoji, color, initial, size = 28 }) {
   const base = { width:size, height:size, borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 };
@@ -470,7 +493,7 @@ function LinkScreen({ link, onDone, theme, toggleTheme }) {
   const isReset = link.type === "reset";
   return (
     <Screen>
-      <button onClick={toggleTheme} aria-label="Switch between light and dark mode" style={{...S.navBtn,position:"fixed",top:12,right:16}}>{theme==="dark"?"☀️":"🌙"}</button>
+      <button onClick={toggleTheme} aria-label="Switch between light and dark mode" style={{...S.navBtn,position:"fixed",top:12,right:16}}><Ico n={theme==="dark"?"sun":"moon"} size={18} mr={0}/></button>
       <div style={S.bigLogo}><Crest size={96}/><div style={S.bigTitle}>THE GAFFER</div></div>
       <div style={{...S.card,width:"100%",maxWidth:380,display:"flex",flexDirection:"column",gap:12,textAlign:"center"}}>
         {state==="working"&&<Loader msg={isReset?"Saving…":"Confirming your email…"}/>}
@@ -576,7 +599,7 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
   return (
     <Screen>
       <button onClick={toggleTheme} aria-label="Switch between light and dark mode" style={{...S.navBtn,position:"fixed",top:12,right:16}}>
-        {theme==="dark"?"☀️":"🌙"}
+        <Ico n={theme==="dark"?"sun":"moon"} size={18} mr={0}/>
       </button>
       <div style={S.bigLogo}>
         <Crest size={104}/>
@@ -942,7 +965,8 @@ export default function App() {
     return () => clearInterval(id);
   }, [round]);
 
-  const groupName      = gLabel(myGroups.find(g=>g.id===groupId));
+  const curGroup       = myGroups.find(g=>g.id===groupId);
+  const groupName      = gLabel(curGroup);
   const myEntries      = username ? subs.filter(s=>s.username===username) : [];
   const deadlineLocked = round ? isDeadlinePassed(round.fixtures) : false;
   const canAddEntry    = myEntries.length < MAX_ENTRIES && !deadlineLocked;
@@ -1101,7 +1125,7 @@ export default function App() {
               {myGroups.map(g=><option key={g.id} value={g.id}>{gLabel(g)}</option>)}
             </select>
           )}
-          <button style={S.navBtn} onClick={toggleTheme} aria-label="Switch between light and dark mode">{theme==="dark"?"☀️":"🌙"}</button>
+          <button style={S.navBtn} onClick={toggleTheme} aria-label="Switch between light and dark mode"><Ico n={theme==="dark"?"sun":"moon"} size={18} mr={0}/></button>
           <button style={S.navBtn} onClick={signOut}>Sign out</button>
         </div>
       </div>
@@ -1113,7 +1137,7 @@ export default function App() {
           <div role="status" aria-label={`Playing in ${groupName}`} style={{display:"flex",justifyContent:"center",padding:"8px 16px",marginTop:56,marginBottom:-34,background:`hsl(${h} 65% 52% / 0.2)`,borderBottom:`3px solid hsl(${h} 65% 52%)`}}>
             <div style={{display:"inline-flex",alignItems:"center",gap:8,fontSize:16,fontWeight:800,color:"var(--text)",maxWidth:"100%"}}>
               <span style={{fontSize:11,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",color:"var(--muted)"}}>Playing in</span>
-              <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{groupName}</span>
+              <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}><GroupMark emoji={curGroup&&curGroup.emoji} size={26}/>{curGroup?curGroup.name:groupName}</span>
             </div>
           </div>
         );
@@ -1127,7 +1151,7 @@ export default function App() {
             <div style={S.bigTitle}>THE GAFFER</div>
             <div style={S.bigSub}>Weekly Football Prediction League</div>
             {groupName&&<div style={{marginTop:12,display:"inline-block",padding:"6px 18px",borderRadius:999,fontSize:18,fontWeight:800,color:"var(--text)",
-              border:`2px solid hsl(${groupHue(groupId)} 65% 52%)`,background:`hsl(${groupHue(groupId)} 65% 52% / 0.18)`}}>{groupName}</div>}
+              border:`2px solid hsl(${groupHue(groupId)} 65% 52%)`,background:`hsl(${groupHue(groupId)} 65% 52% / 0.18)`}}><GroupMark emoji={curGroup&&curGroup.emoji} size={28}/>{curGroup?curGroup.name:groupName}</div>}
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:10,width:"100%",maxWidth:360}}>
             <Btn gold onClick={()=>{setEntryView("list");setView("submit");}} disabled={!round||round.locked||deadlineLocked}>
@@ -1148,7 +1172,7 @@ export default function App() {
               <span style={{color:"var(--muted)"}}>{roundDates(round)}</span>
               <span style={{color:"var(--muted)",margin:"0 8px"}}>·</span>
               <span style={{color:"var(--muted)"}}>{subs.length} entr{subs.length!==1?"ies":"y"}</span>
-              {(round.locked||deadlineLocked)&&<span style={{color:"var(--red)",marginLeft:8,fontSize:11}}>🔒 Locked</span>}
+              {(round.locked||deadlineLocked)&&<span style={{color:"var(--red)",marginLeft:8,fontSize:11}}><Ico n="lock" size={14} mr={4}/>Locked</span>}
               {!round.locked&&!deadlineLocked&&countdown&&<span style={{color:"var(--gold)",marginLeft:8,fontSize:11,fontFamily:"'Bebas Neue',sans-serif",letterSpacing:"0.1em"}}>⏱ {countdown}</span>}
             </div>
           ):(
@@ -1177,7 +1201,7 @@ export default function App() {
                   {round.league.flag} {round.league.name} — {roundDates(round)}
                 </div>
                 <div style={{fontSize:13,color:"var(--muted)",marginBottom:12}}>
-                  {subs.length} entr{subs.length!==1?"ies":"y"} · {round.locked?"🔒 Locked":"🟢 Open"}
+                  {subs.length} entr{subs.length!==1?"ies":"y"} · {round.locked?<><Ico n="lock" size={14} mr={4}/>Locked</>:"🟢 Open"}
                   {round.winnersFound?" · 🏆 Winner found":""}
                 </div>
                 <div style={{fontSize:13,color:"var(--muted)",marginBottom:12}}>
@@ -1191,7 +1215,7 @@ export default function App() {
                   {round.fixtures.map((f,i)=>(
                     <div key={i} style={{fontSize:13,color:"var(--text)",display:"flex",gap:8}}>
                       <span style={{color:"var(--muted)",width:20}}>#{i+1}</span>
-                      <span>{f.home} vs {f.away}{f.replaced?" 🔁":""}</span>
+                      <span>{f.home} vs {f.away}{f.replaced&&<> <Ico n="calendar" size={14} mr={0}/></>}</span>
                       <span style={{color:"var(--muted)",marginLeft:"auto"}}>{f.date}</span>
                       {!round.mockResults&&(
                         round.results?.[i]?.result==="void"
@@ -1220,24 +1244,19 @@ export default function App() {
           <div style={{width:"100%",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:12,padding:"16px"}}>
             <div style={S.sectionLabel}>Groups</div>
             {groups.map(g=>(
-              <div key={g.id} style={{fontSize:13,display:"flex",gap:8,padding:"6px 0",borderBottom:"1px solid var(--border)"}}>
-                <select aria-label={`Badge for ${g.name}`} value={g.emoji||""} onChange={e=>setGroupEmoji(g.id,e.target.value)}
-                  style={{...S.input,width:56,padding:"2px 4px",fontSize:14}}>
-                  {GROUP_EMOJIS.map(em=><option key={em||"none"} value={em}>{em||"–"}</option>)}
-                </select>
-                <span style={{flex:1}}>{g.name}</span>
-                <code style={{color:"var(--gold)"}}>{g.invite_code}</code>
-                <span style={{color:"var(--muted)",width:64,textAlign:"right"}}>{g.members} player{g.members!==1?"s":""}</span>
+              <div key={g.id} style={{fontSize:13,padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+                <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6}}>
+                  <span style={{flex:1}}><GroupMark emoji={g.emoji} size={22}/>{g.name}</span>
+                  <code style={{color:"var(--gold)"}}>{g.invite_code}</code>
+                  <span style={{color:"var(--muted)",width:64,textAlign:"right"}}>{g.members} player{g.members!==1?"s":""}</span>
+                </div>
+                <BadgePicker label={`Badge for ${g.name}`} value={g.emoji||""} onChange={v=>setGroupEmoji(g.id,v)}/>
               </div>
             ))}
             {groups.length===0&&<div style={{fontSize:13,color:"var(--muted)"}}>No groups found.</div>}
             <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:12}}>
-              <div style={{display:"flex",gap:8}}>
-                <select aria-label="New group badge" value={newGroupEmoji} onChange={e=>setNewGroupEmoji(e.target.value)} style={{...S.input,width:64}}>
-                  {GROUP_EMOJIS.map(em=><option key={em||"none"} value={em}>{em||"–"}</option>)}
-                </select>
-                <input style={S.input} placeholder="New group name" value={newGroupName} onChange={e=>setNewGroupName(e.target.value)} maxLength={30}/>
-              </div>
+              <BadgePicker label="New group badge" value={newGroupEmoji} onChange={setNewGroupEmoji}/>
+              <input style={S.input} placeholder="New group name" value={newGroupName} onChange={e=>setNewGroupName(e.target.value)} maxLength={30}/>
               <input style={S.input} placeholder="Invite code (e.g. GAFFERMATES26)" value={newGroupCode} onChange={e=>setNewGroupCode(e.target.value.toUpperCase())} maxLength={24} autoCapitalize="characters"/>
               <Btn onClick={addGroup} disabled={loading}>+ Add group</Btn>
             </div>
@@ -1315,7 +1334,7 @@ export default function App() {
       {view==="submit"&&round&&(round.locked||deadlineLocked)&&(
         <Screen><BackBtn onClick={()=>setView("home")}/>
           <div style={{textAlign:"center",paddingTop:40}}>
-            <div style={{fontSize:40,marginBottom:12}}>🔒</div>
+            <div style={{marginBottom:12}}><Ico n="lock" size={56} mr={0}/></div>
             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,color:"var(--gold)",letterSpacing:2,marginBottom:8}}>Submissions Closed</div>
             <div style={{color:"var(--muted)",fontSize:14,lineHeight:1.7}}>
               {round.winnersFound?"This round has a winner!":"All matches have been played. Check the lobby for results."}
@@ -1428,7 +1447,7 @@ export default function App() {
           )}
           {(round.locked||deadlineLocked)&&!round.winnersFound&&(
             <div style={{width:"100%",background:"rgba(248,113,113,0.07)",border:"1px solid rgba(248,113,113,0.2)",borderRadius:10,padding:"10px 16px",textAlign:"center",fontSize:13,color:"var(--danger-text)",marginBottom:4}}>
-              🔒 Submissions closed
+              <Ico n="lock" size={20} mr={6}/>Submissions closed
             </div>
           )}
 
@@ -1437,7 +1456,7 @@ export default function App() {
             {round.fixtures.map((f,i)=>(
               <div key={i} style={S.lobbyRow}>
                 <span style={S.tag2}>#{i+1}</span>
-                {f.replaced&&<span title="Replacement fixture" style={{fontSize:12,marginRight:4}}>🔁</span>}
+                {f.replaced&&<span title="Replacement fixture" style={{marginRight:4}}><Ico n="calendar" size={16} mr={0}/></span>}
                 <span style={{flex:1,fontSize:14,fontWeight:500}}>{f.home}</span>
                 <span style={{color:"var(--muted)",fontSize:12,margin:"0 6px"}}>vs</span>
                 <span style={{flex:1,fontSize:14,fontWeight:500,textAlign:"right"}}>{f.away}</span>
@@ -1454,7 +1473,7 @@ export default function App() {
             if (!need.length) return null;
             return (
               <div style={{width:"100%",marginBottom:20,background:"rgba(240,192,64,0.07)",border:"1px solid rgba(240,192,64,0.25)",borderRadius:12,padding:16}}>
-                <div style={S.sectionLabel}>🔁 A match was postponed. Re-pick it</div>
+                <div style={S.sectionLabel}><Ico n="calendar" size={16} mr={6}/>A match was postponed. Re-pick it</div>
                 <div style={{fontSize:12,color:"var(--muted)",marginBottom:10,lineHeight:1.6}}>
                   It has been replaced. Pick the result for each of your entries before it kicks off.
                 </div>
@@ -1493,7 +1512,7 @@ export default function App() {
                           <div style={{fontWeight:600,fontSize:14}}>{p}</div>
                           <div style={{fontSize:11,color:"var(--muted)"}}>{pe.length} entr{pe.length!==1?"ies":"y"}</div>
                         </div>
-                        <span style={{fontSize:11,color:"var(--muted)"}}>🔒</span>
+                        <span style={{color:"var(--muted)"}} aria-label="locked"><Ico n="lock" size={14} mr={0}/></span>
                       </div>
                     );
                   })}
@@ -1505,9 +1524,9 @@ export default function App() {
           {error&&<ErrorBox style={{marginBottom:12}}>{error}</ErrorBox>}
           <div style={{display:"flex",flexDirection:"column",gap:10,width:"100%",maxWidth:360}}>
             {loading?<Loader msg={loadMsg}/>:<>
-              {!round.winnersFound&&<Btn gold onClick={startReveal} disabled={subs.length===0}>🎉 Check Results &amp; Reveal</Btn>}
+              {!round.winnersFound&&<Btn gold onClick={startReveal} disabled={subs.length===0}><Ico n="check"/>Check Results &amp; Reveal</Btn>}
               {isAdmin&&round.locked&&!round.winnersFound&&<Btn onClick={()=>requireAdmin("admin")}>⚙️ Admin Panel</Btn>}
-              {isAdmin&&round.winnersFound&&<Btn gold onClick={()=>requireAdmin("admin")}>🔄 Admin: Start Next Round</Btn>}
+              {isAdmin&&round.winnersFound&&<Btn gold onClick={()=>requireAdmin("admin")}><Ico n="refresh"/>Admin: Start Next Round</Btn>}
               {!round.locked&&!deadlineLocked&&<Btn onClick={()=>{setEntryView("list");setView("submit");}}>✏️ My Entries</Btn>}
             </>}
             <button style={S.adminLink} onClick={()=>requireAdmin("reset")}>🔐 Admin: Full Reset</button>
@@ -1535,7 +1554,7 @@ export default function App() {
           {groupId&&myGroups.some(x=>x.id===groupId)&&(
             <div style={{...S.card,width:"100%"}}>
               <div style={S.sectionLabel}>Invite friends to {groupName}</div>
-              <Btn onClick={shareGroupInvite}>📨 Share invite link</Btn>
+              <Btn onClick={shareGroupInvite}><Ico n="link"/>Share invite link</Btn>
               {shareNote&&<div style={{fontSize:12,color:"var(--green)",marginTop:8,textAlign:"center"}}>{shareNote}</div>}
             </div>
           )}
@@ -1795,7 +1814,7 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
 
       {winners.length>0&&(
         <div style={{width:"100%",background:"rgba(240,192,64,0.08)",border:"1px solid rgba(240,192,64,0.3)",borderRadius:12,padding:"12px 16px",fontSize:14}}>
-          🏆 {winners.map(w=>`${w.username} (${w.entries} entr${w.entries!==1?"ies":"y"})`).join(", ")} got all 5 right.
+          <Ico n="trophy" size={22} mr={6}/>{winners.map(w=>`${w.username} (${w.entries} entr${w.entries!==1?"ies":"y"})`).join(", ")} got all 5 right.
         </div>
       )}
 
@@ -1828,7 +1847,7 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
               </tr></thead>
               <tbody>{players.map(p=>(
                 <tr key={p.username}>
-                  <td style={cell}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Avatar name={p.username} size={20}/>{p.won?"🏆 ":""}{p.username}</span></td>
+                  <td style={cell}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Avatar name={p.username} size={20}/>{p.won&&<Ico n="medal" size={18} mr={0}/>}{p.username}</span></td>
                   <td style={cell}>{p.entries}</td>
                   <td style={cell}>{p.best===null?"-":`${p.best}/5`}</td>
                   <td style={cell}>{p.acc===null?"-":<>{p.acc}% <span style={{color:"var(--muted)",fontSize:11}}>({p.right}/{p.made})</span></>}</td>
@@ -1961,7 +1980,7 @@ function RevealView({ round, results, subs, onRevealComplete, onHome, onLobby, r
           {outcome.hasWinner?(
             <>
               <div style={S.winnerCard} className="pop glow">
-                <div style={{fontSize:56,marginBottom:12}}>🏆</div>
+                <div style={{marginBottom:12}}><Ico n="trophy" size={84} mr={0}/></div>
                 <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:40,color:"var(--gold)",letterSpacing:3,marginBottom:8}}>
                   {outcome.winners.length===1?"WE HAVE A WINNER!":"WE HAVE WINNERS!"}
                 </div>
@@ -1991,8 +2010,8 @@ function RevealView({ round, results, subs, onRevealComplete, onHome, onLobby, r
                   const names=outcome.winners.map(w=>w.username).join(" & ");
                   const r=await shareOrCopy(`🏆 ${names} got all 5 right on The Gaffer! Can you beat it?`, window.location.origin+"/");
                   setShareMsg(r==="copied"?"Copied. Paste it into your chat.":r==="failed"?"Couldn't share.":"");
-                }} style={{flex:1}}>📣 Share result</Btn>
-                {isAdmin&&<Btn gold onClick={()=>requireAdmin("admin")} style={{flex:1}}>🔄 Start Next Round</Btn>}
+                }} style={{flex:1}}><Ico n="share"/>Share result</Btn>
+                {isAdmin&&<Btn gold onClick={()=>requireAdmin("admin")} style={{flex:1}}><Ico n="refresh"/>Start Next Round</Btn>}
                 <Btn onClick={onHome} style={{flex:1}}>← Home</Btn>
               </div>
               {shareMsg&&<div style={{fontSize:12,color:"var(--green)"}}>{shareMsg}</div>}
