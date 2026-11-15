@@ -1,0 +1,31 @@
+name: Last Man Standing
+
+on:
+  schedule:
+    - cron: "23 */2 * * *"    # every 2 hours
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (log what would be written, change nothing)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: gaffer-lms
+  cancel-in-progress: false
+
+jobs:
+  lms:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Update Last Man Standing gameweeks
+        env:
+          FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
+          SB_URL: https://oszrnwhyvmvccxxepsnm.supabase.co
+          SB_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+        run: node scripts/lms.js
