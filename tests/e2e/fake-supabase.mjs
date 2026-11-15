@@ -127,6 +127,49 @@ export function createFakeSupabase() {
   }
 
   // ── database functions the app calls ──
+  const recovery = {};       // username -> { email, verified }
+  const resetTokens = {};    // token -> username
+  // Last Man Standing, simplified: one gameweek, one competition. Tests set lms.gameweek / lms.comp / lms.entries / lms.manager.
+  const lms = { gameweek: null, comp: null, entries: [], manager: null, now: () => Date.now() };
+  function lmsRpc(route, me, name, args) {
+    const json = (status, body) => route.fulfill({ status, headers: { ...cors, "content-type": "application/json" }, body: JSON.stringify(body) });
+    const isAdmin = tables.admins.some(a => a.username === me);
+    const gw = lms.gameweek, dl = gw ? Date.parse(gw.deadline) : 0, now = lms.now();
+    log.push({ method: "RPC", name, args, by: me });
+    if (name === "lms_state") {
+      if (!tables.memberships.some(m => m.username === me && m.group_id === args.p_group) && !isAdmin) return json(400, { message: "Not a member of this group" });
+      const c = lms.comp && lms.comp.group_id === args.p_group ? lms.comp : null;
+      const visible = !gw || now >= dl;
+      const entries = c ? lms.entries.map(e => ({ ...e, pickedThisWeek: (e.picks || []).some(p => gw && p.gameweek === gw.id && p.team),
+        picks: (e.picks || []).filter(p => e.username === me || visible || !gw || p.gameweek !== gw.id) })) : [];
+      return json(200, { me, now, canManage: isAdmin || lms.manager === me, gameweek: gw, entries,
+        competition: c ? { id: c.id, name: c.name, status: c.status, winners: c.winners || [], startGameweek: c.startGameweek, startMatchday: c.startMatchday, joinOpen: c.status === "running" && now < dl } : null });
+    }
+    if (name === "lms_start") {
+      if (!(isAdmin || lms.manager === me)) return json(400, { message: "Only the group owner can start a game" });
+      lms.comp = { id: "c1", group_id: args.p_group, name: args.p_name || "Last Man Standing", status: "running", winners: [], startGameweek: gw.id, startMatchday: gw.matchday };
+      lms.entries = [{ username: me, avatar: null, avatarColor: null, status: "alive", outMatchday: null, cycleFrom: gw.id, picks: [] }];
+      return json(200, "c1");
+    }
+    if (name === "lms_join") {
+      if (now >= dl) return json(400, { message: "Entries closed: the first gameweek has locked" });
+      lms.entries.push({ username: me, avatar: null, avatarColor: null, status: "alive", outMatchday: null, cycleFrom: gw.id, picks: [] });
+      return json(200, null);
+    }
+    if (name === "lms_pick") {
+      const e = lms.entries.find(x => x.username === me);
+      if (!e || e.status !== "alive") return json(400, { message: "You are not in this game" });
+      const f = gw.fixtures.find(x => x.home === args.p_team || x.away === args.p_team);
+      if (!f) return json(400, { message: "That team isn't playing this gameweek" });
+      if (e.picks.some(p => p.outcome === "win" && p.gameweek >= e.cycleFrom && p.team === args.p_team)) return json(400, { message: "You have already used that team" });
+      const cur = e.picks.find(p => p.gameweek === gw.id);
+      const curFx = cur && gw.fixtures.find(x => x.matchId === cur.matchId);
+      if (now >= dl && !(curFx && curFx.result === "postponed" && f.kickoffTs > now)) return json(400, { message: "Picks are locked" });
+      e.picks = e.picks.filter(p => p.gameweek !== gw.id).concat({ gameweek: gw.id, matchday: gw.matchday, team: args.p_team, matchId: f.matchId, outcome: null });
+      return json(200, null);
+    }
+    return json(404, { message: `no function ${name}` });
+  }
   async function rpc(route, req, name) {
     const json = (status, body) => route.fulfill({ status, headers: { ...cors, "content-type": "application/json" }, body: JSON.stringify(body) });
     const me = callerOf(req);
@@ -153,6 +196,8 @@ export function createFakeSupabase() {
       const open = Date.now() >= first - 60000;                              // others' picks stay hidden until entries lock
       return json(200, tables.submissions.filter(x => x.group_id === args.gid).map(x => ({ ...x, preds: x.username === me || open ? x.preds : {} })));
     }
+    if (name.startsWith("lms_")) return lmsRpc(route, me, name, args);
+    if (name === "my_recovery") { const r = recovery[me]; return json(200, r ? [{ email: r.email.replace(/^(.).*@/, "$1****@"), verified: !!r.verified }] : []); }
     return json(404, { message: `no function ${name}` });
   }
 
@@ -209,10 +254,38 @@ export function createFakeSupabase() {
         const rr = tables.reset_requests.find(x => x.id === body.request_id); if (rr) rr.status = "done";
         return json(200, { ok: true, username: u.username, tempPassword: temp });
       }
+      if (body.action === "set_email") {
+        const me = callerOf(req); if (!me) return json(401, { error: "Sign in first." });
+        const email = String(body.email || "").trim().toLowerCase();
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json(400, { error: "That doesn't look like an email address." });
+        recovery[me] = { email, verified: false }; log.push({ method: "EMAIL", action: "set_email", username: me, email });
+        return json(200, { ok: true });
+      }
+      if (body.action === "resend_email") { const me = callerOf(req); return me ? json(200, { ok: true }) : json(401, { error: "Sign in first." }); }
+      if (body.action === "remove_email") {
+        const me = callerOf(req); if (!me) return json(401, { error: "Sign in first." });
+        delete recovery[me]; return json(200, { ok: true });
+      }
+      if (body.action === "verify_email") {
+        const u = Object.keys(recovery).find(k => body.token === "good-verify-" + k);
+        if (!u) return json(400, { error: "This link has expired or has already been used.", code: "bad_token" });
+        recovery[u].verified = true; return json(200, { ok: true });
+      }
+      if (body.action === "request_reset") {
+        log.push({ method: "EMAIL", action: "request_reset", username: body.username });
+        return json(200, { ok: true });
+      }
+      if (body.action === "complete_reset") {
+        const u = body.token && body.token.startsWith("good-reset-") ? body.token.slice(11) : null;
+        if (!u) return json(400, { error: "This link has expired or has already been used.", code: "bad_token" });
+        if (String(body.password).length < 6) return json(400, { error: "Password must be between 6 and 72 characters." });
+        const l = logins.find(x => x.username === u); if (l) l.password = body.password;
+        return json(200, { ok: true });
+      }
       return json(400, { error: "Unknown action." });
     }
     return json(404, {});
   }
 
-  return { tables, log, hooks, handle, handleAuth, addLogin, logins };
+  return { tables, log, hooks, handle, handleAuth, addLogin, logins, recovery, lms };
 }
