@@ -111,7 +111,7 @@ export default function LmsView({ ui, sb, username, groups, groupId: initialGrou
     <div style={{textAlign: "center", width: "100%"}}>
       <div style={S.eyebrow}>THE GAFFER</div>
       <h2 style={S.sectionH2}>Last Man Standing</h2>
-      <p style={S.sectionSub}>Pick one Premier League team to win each gameweek. Win and you stay in. Draw, lose or forget and you're out.</p>
+      <p style={S.sectionSub}>Pick one Premier League team to win each gameweek. Win and you stay in. Draw, lose or forget and you're out. You can't reuse a team until you've used them all.</p>
     </div>
     <details style={{width: "100%", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "10px 16px"}}>
       <summary style={{cursor: "pointer", fontWeight: 700, fontSize: 14}}>How to play</summary>
