@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, createContext, useContext } from "react";
 import { emailFor } from "../supabase/functions/auth/handler.js";
+import LmsView from "./Lms.jsx";
 import { deadlineTs, isDeadlinePassed, msUntilDeadline, fmtCountdown, hit, isPerfect, scoreEntry } from "./logic.js";
 
 // ─── CSS ──────────────────────────────────────────────────────────────────────
@@ -35,6 +36,17 @@ const css = `
   .shake  { animation: shake 0.35s ease; }
   .glow   { animation: glow 2s ease-in-out infinite; }
   button  { cursor: pointer; font-family: inherit; }
+  :root { --navh: 56px; }
+  .gnav-id { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+  .gnav-tools { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .gscreen { padding-top: 80px; }
+  @media (max-width: 560px) {
+    :root { --navh: 100px; }
+    .gnav { flex-wrap: wrap; row-gap: 8px; }
+    .gnav-tools { margin-left: auto; }
+    .gnav-id { order: 3; flex: 1 1 100%; justify-content: flex-start; }
+    .gscreen { padding-top: calc(var(--navh) + 24px); }
+  }
   input:focus { outline: none; border-color: var(--gold) !important; }
   ::-webkit-scrollbar { width: 4px; }
   ::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 2px; }
@@ -492,7 +504,7 @@ function LinkScreen({ link, onDone, theme, toggleTheme }) {
   }
   const isReset = link.type === "reset";
   return (
-    <Screen>
+    <Screen bare>
       <button onClick={toggleTheme} aria-label="Switch between light and dark mode" style={{...S.navBtn,position:"fixed",top:12,right:16}}><Ico n={theme==="dark"?"sun":"moon"} size={18} mr={0}/></button>
       <div style={S.bigLogo}><Crest size={96}/><div style={S.bigTitle}>THE GAFFER</div></div>
       <div style={{...S.card,width:"100%",maxWidth:380,display:"flex",flexDirection:"column",gap:12,textAlign:"center"}}>
@@ -597,7 +609,7 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
   const go = () => tab==="login"?login():register();
 
   return (
-    <Screen>
+    <Screen bare>
       <button onClick={toggleTheme} aria-label="Switch between light and dark mode" style={{...S.navBtn,position:"fixed",top:12,right:16}}>
         <Ico n={theme==="dark"?"sun":"moon"} size={18} mr={0}/>
       </button>
@@ -646,7 +658,7 @@ function AuthScreen({ onLogin, theme, toggleTheme }) {
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [username,  setUsername]  = useState(session.get());
-  const [view,      setView]      = useState("home");
+  const [view,      setView]      = useState(() => { try { return window.location.pathname === "/lms" ? "lms" : "home"; } catch { return "home"; } });
   const [round,     setRound]     = useState(null);
   const [subs,      setSubs]      = useState([]);
   const [loading,   setLoading]   = useState(false);
@@ -726,6 +738,19 @@ export default function App() {
       window.history.replaceState({}, "", window.location.pathname);
     } catch {}
   }, [username, appReady]);
+  // Last Man Standing lives at /lms: keep the address bar and the back button in step with the view.
+  useEffect(() => {
+    try {
+      const on = window.location.pathname === "/lms";
+      if (view === "lms" && !on) window.history.pushState({}, "", "/lms");
+      else if (view !== "lms" && on) window.history.replaceState({}, "", "/");
+    } catch {}
+  }, [view]);
+  useEffect(() => {
+    const onPop = () => { try { setView(v => window.location.pathname === "/lms" ? "lms" : (v === "lms" ? "home" : v)); } catch {} };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   const toggleTheme = () => setTheme(t => t === "dark" ? "light" : "dark");
   // A reset or confirmation link from an email. The token is kept in memory and removed from the address bar straight away.
   const [emailLink, setEmailLink] = useState(() => {
@@ -1114,17 +1139,19 @@ export default function App() {
       {showPin&&<PinModal onSuccess={onPinSuccess} onCancel={()=>setShowPin(false)}/>}
 
       {/* Nav */}
-      <div style={{...S.nav,...(myGroups.length>1&&groupId?{borderBottom:`3px solid hsl(${groupHue(groupId)} 65% 52%)`}:{})}}>
+      <div className="gnav" style={{...S.nav,...(myGroups.length>1&&groupId?{borderBottom:`3px solid hsl(${groupHue(groupId)} 65% 52%)`}:{})}}>
         <div style={S.navLogo} onClick={()=>setView("home")}><img src="/favicon-48.png" alt="" width={18} height={18} style={{verticalAlign:"middle",marginRight:5}}/>THE GAFFER</div>
-        <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+        <div className="gnav-id">
           <Avatar name={username} size={24}/>
-          <span style={{fontSize:13,color:"var(--muted)",maxWidth:110,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{username}{myGroups.length===1&&groupName?` · ${groupName}`:""}</span>
+          <span style={{fontSize:13,color:"var(--muted)",flexShrink:myGroups.length>1?0:1,maxWidth:myGroups.length>1?"36vw":"100%",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{username}{myGroups.length===1&&groupName?` · ${groupName}`:""}</span>
           {myGroups.length>1&&(
-            <select value={groupId||""} onChange={e=>switchGroup(e.target.value)}
-              style={{...S.input,width:"auto",maxWidth:"min(280px, 44vw)",padding:"4px 8px",fontSize:12,border:`2px solid hsl(${groupHue(groupId)} 65% 52%)`}}>
+            <select value={groupId||""} onChange={e=>switchGroup(e.target.value)} aria-label="Switch group"
+              style={{...S.input,width:"auto",flex:"1 1 0",minWidth:0,maxWidth:280,padding:"4px 8px",fontSize:12,border:`2px solid hsl(${groupHue(groupId)} 65% 52%)`}}>
               {myGroups.map(g=><option key={g.id} value={g.id}>{gLabel(g)}</option>)}
             </select>
           )}
+        </div>
+        <div className="gnav-tools">
           <button style={S.navBtn} onClick={toggleTheme} aria-label="Switch between light and dark mode"><Ico n={theme==="dark"?"sun":"moon"} size={18} mr={0}/></button>
           <button style={S.navBtn} onClick={signOut}>Sign out</button>
         </div>
@@ -1134,7 +1161,7 @@ export default function App() {
       {myGroups.length>1&&groupId&&["home","submit","lobby","story","reveal"].includes(view)&&(()=>{
         const h = groupHue(groupId);
         return (
-          <div role="status" aria-label={`Playing in ${groupName}`} style={{display:"flex",justifyContent:"center",padding:"8px 16px",marginTop:56,marginBottom:-34,background:`hsl(${h} 65% 52% / 0.2)`,borderBottom:`3px solid hsl(${h} 65% 52%)`}}>
+          <div role="status" aria-label={`Playing in ${groupName}`} style={{display:"flex",justifyContent:"center",padding:"8px 16px",marginTop:"var(--navh)",marginBottom:"calc(var(--navh) * -1 + 22px)",background:`hsl(${h} 65% 52% / 0.2)`,borderBottom:`3px solid hsl(${h} 65% 52%)`}}>
             <div style={{display:"inline-flex",alignItems:"center",gap:8,fontSize:16,fontWeight:800,color:"var(--text)",maxWidth:"100%"}}>
               <span style={{fontSize:11,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",color:"var(--muted)"}}>Playing in</span>
               <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}><GroupMark emoji={curGroup&&curGroup.emoji} size={26}/>{curGroup?curGroup.name:groupName}</span>
@@ -1159,6 +1186,7 @@ export default function App() {
             </Btn>
             <Btn onClick={()=>setView("lobby")} disabled={!round}><Ico n="lobby"/>Lobby</Btn>
             <Btn onClick={openStory}><Ico n="story"/>The Story So Far</Btn>
+            <Btn onClick={()=>setView("lms")}><Ico n="lms"/>Last Man Standing</Btn>
             <Btn onClick={()=>{setJoinErr("");setJoinCode("");setView("join");}}><Ico n="groups"/>My Groups</Btn>
             <Btn onClick={openProfile}><Ico n="profile"/>My Profile</Btn>
             <Btn onClick={()=>setView("help")}><Ico n="help"/>How to play</Btn>
@@ -1677,6 +1705,11 @@ export default function App() {
         </Screen>
       )}
 
+      {view==="lms"&&appReady&&(
+        <LmsView username={username} sb={sb} groups={myGroups} groupId={groupId} onBack={()=>setView("home")}
+          ui={{Screen,BackBtn,Btn,Loader,ErrorBox,Ico,GroupMark,AvatarBubble,S,TIP_URL,gLabel}}/>
+      )}
+
       {view==="story"&&(
         <StoryView history={history} round={round} subs={subs}
           series={storySeries} setSeries={setStorySeries} onBack={()=>setView("home")}/>
@@ -2075,10 +2108,10 @@ function RevealView({ round, results, subs, onRevealComplete, onHome, onLobby, r
 }
 
 // ─── Small components ─────────────────────────────────────────────────────────
-function Screen({ children, wide }) {
+function Screen({ children, wide, bare }) {
   return (
-    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",
-      padding:wide?"80px 16px 80px":"80px 20px 80px",maxWidth:wide?720:480,margin:"0 auto",gap:14}}>
+    <div className={bare?undefined:"gscreen"} style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",
+      ...(bare?{paddingTop:80}:{}),paddingLeft:wide?16:20,paddingRight:wide?16:20,paddingBottom:80,maxWidth:wide?720:480,margin:"0 auto",gap:14}}>
       {children}
     </div>
   );
