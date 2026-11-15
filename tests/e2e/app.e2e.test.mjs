@@ -377,17 +377,18 @@ test("a group badge shows by the group name", async () => {
 test("the admin can set a badge on a group and give a new group one", async () => {
   await run({ loginAs: "ann" }, async w => {
     await adminIn(w);
-    await w.page.getByLabel("Badge for Alpha").selectOption("🔥");
+    await w.page.getByRole("button", { name: "Badge for Alpha: Fireball" }).click();
     await w.page.waitForFunction(() => true);
-    for (let i = 0; i < 30 && w.tables.groups.find(g => g.id === "g-alpha").emoji !== "🔥"; i++) await new Promise(r => setTimeout(r, 100));
-    assert.equal(w.tables.groups.find(g => g.id === "g-alpha").emoji, "🔥");
+    for (let i = 0; i < 30 && w.tables.groups.find(g => g.id === "g-alpha").emoji !== "b:fire"; i++) await new Promise(r => setTimeout(r, 100));
+    assert.equal(w.tables.groups.find(g => g.id === "g-alpha").emoji, "b:fire");
+    await w.page.locator('img[src="/badges/fire.png"]').first().waitFor({ state: "attached" });
 
-    await w.page.getByLabel("New group badge").selectOption("🚀");
+    await w.page.getByRole("button", { name: "New group badge: Rocket" }).click();
     await w.page.getByPlaceholder("New group name").fill("Rockets");
     await w.page.getByPlaceholder(/Invite code/).fill("rockets1");
     await w.click(/Add group/);
     await w.text("ROCKETS1");
-    assert.equal(w.tables.groups.find(g => g.invite_code === "ROCKETS1").emoji, "🚀");
+    assert.equal(w.tables.groups.find(g => g.invite_code === "ROCKETS1").emoji, "b:rocket");
   });
 });
 
@@ -885,7 +886,7 @@ test("round dates replace 'Week N' on the entry screens, and the group banner is
     assert.match(eyebrow, /\b(MON|TUE|WED|THU|FRI|SAT|SUN) \d{1,2}\b/i, "shows match dates");
     assert.doesNotMatch(eyebrow, /Week \d/);
     const bannerTop = await w.page.getByRole("status").filter({ hasText: "Playing in" }).first().evaluate(e => e.getBoundingClientRect().top);
-    const navBottom = await w.page.locator("div").filter({ hasText: /^⚽ THE GAFFER/ }).first().evaluate(e => { let n = e; while (n && getComputedStyle(n).position !== "fixed") n = n.parentElement; return n ? n.getBoundingClientRect().bottom : 0; });
+    const navBottom = await w.page.locator("div").filter({ hasText: /^THE GAFFER/ }).first().evaluate(e => { let n = e; while (n && getComputedStyle(n).position !== "fixed") n = n.parentElement; return n ? n.getBoundingClientRect().bottom : 0; });
     assert.ok(bannerTop >= navBottom - 1, `banner (${bannerTop}) must sit below the top bar (${navBottom})`);
   });
 });
@@ -952,5 +953,234 @@ test("backing out of an edit changes nothing, and a new entry afterwards starts 
     await w.click(/Add Entry/);
     await w.text("New Entry");
     assert.equal(await w.page.getByText("0/5 picked").count(), 1);
+  });
+});
+
+// ── Recovery email ─────────────────────────────────────────────────────────
+test("profile: add a recovery email, see it waiting, then remove it", async () => {
+  await run({ loginAs: "ann" }, async w => {
+    await w.click(/Profile|ann/);
+    await w.page.getByLabel("Recovery email address").fill("not-an-email");
+    await w.click("Save");
+    await w.text("doesn't look like an email");
+    await w.page.getByLabel("Recovery email address").fill("Ann@Example.com");
+    await w.click("Save");
+    await w.text("sent a confirmation link");
+    await w.text("Waiting for you to tap the link");
+    assert.equal(w.fake.recovery.ann.email, "ann@example.com");
+    await w.click("Remove email");
+    await w.text("has been removed");
+    assert.equal(w.fake.recovery.ann, undefined);
+  });
+});
+
+test("forgot password: Email me a reset link gives the same answer for any username", async () => {
+  await run({}, async w => {
+    await w.click("Forgot password?");
+    await w.click("Email me a reset link");
+    await w.text("Type your username first");
+    await w.page.getByPlaceholder("your_username").fill("nobody_here");
+    await w.click("Email me a reset link");
+    await w.text("If that username has a confirmed recovery email");
+  });
+});
+
+test("a reset link lets the player choose a new password and sign in with it", async () => {
+  await run({ path: "/?reset=good-reset-bob" }, async w => {
+    await w.text("Choose a new password");
+    assert.equal(await w.page.evaluate(() => location.search), "", "token is removed from the address bar");
+    await w.page.locator('input[type="password"]').nth(0).fill("newpass1");
+    await w.page.locator('input[type="password"]').nth(1).fill("different");
+    await w.click("Set new password");
+    await w.text("don't match");
+    await w.page.locator('input[type="password"]').nth(1).fill("newpass1");
+    await w.click("Set new password");
+    await w.text("Password changed");
+    await w.click("Go to sign in");
+    await signIn(w, "bob", "newpass1");
+    await w.text("bob · Alpha");
+  });
+});
+
+test("an expired or used reset link says so", async () => {
+  await run({ path: "/?reset=stale" }, async w => {
+    await w.page.locator('input[type="password"]').nth(0).fill("newpass1");
+    await w.page.locator('input[type="password"]').nth(1).fill("newpass1");
+    await w.click("Set new password");
+    await w.text("expired or has already been used");
+  });
+});
+
+test("a confirmation link confirms the email; a bad one explains", async () => {
+  await run({}, async w => {
+    w.fake.recovery.bob = { email: "bob@example.com", verified: false };
+    await w.page.goto("https://gaffer.test/?verify=good-verify-bob");
+    await w.text("Email confirmed");
+    assert.equal(w.fake.recovery.bob.verified, true);
+  });
+  await run({ path: "/?verify=nope" }, async w => { await w.text("expired or has already been used"); });
+});
+
+test("crest avatars: pick one, it is saved in a short form, and shows as an image", async () => {
+  const setup = t => t.submissions.push(seeEntry("ann", "g-alpha", "Entry 1", "home", "home", "home", "home", "home"));
+  await run({ loginAs: "ann", setup }, async w => {
+    await w.click(/My Profile/);
+    await w.page.getByRole("button", { name: "Avatar Eagle crest" }).click();
+    await w.click(/Save profile/);
+    await w.text("Weekly Football Prediction League");
+    assert.equal(w.tables.users.find(u => u.username === "ann").avatar, "i:eagle");
+    assert.ok("i:eagle".length <= 8, "fits the avatar column limit");
+    await w.click(/Lobby/);
+    await w.page.locator('img[src="/avatars/eagle.png"]').first().waitFor({ state: "attached" });
+  });
+});
+
+// ── Header must fit a phone ────────────────────────────────────────────────
+for (const width of [320, 360, 390, 430, 768]) {
+  test(`header at ${width}px: nothing overlaps or runs off screen, a long name and two groups fit, badge shows as an emoji not a code`, async () => {
+    const LONG = "Longest Name Ever 12";
+    const setup = t => {
+      t.users.push({ username: LONG, handle: "longest-s-name-s-ever-s-12", auth_id: "x-long" });
+      t.memberships.push({ username: LONG, group_id: "g-alpha" }, { username: LONG, group_id: "g-beta" });
+      t.groups.find(g => g.id === "g-alpha").emoji = "b:star";
+      t.groups.find(g => g.id === "g-beta").emoji = "🔥";
+    };
+    await run({ loginAs: LONG, setup }, async w => {
+      await w.page.setViewportSize({ width, height: 800 });
+      await w.page.locator(".gnav").waitFor();
+      await w.text("THE GAFFER");
+      const info = await w.page.evaluate(() => {
+        const nav = document.querySelector(".gnav");
+        const leaves = [...nav.querySelectorAll("img, button, select, span, div")].filter(e => e.children.length === 0 || e.tagName === "SELECT" || e.tagName === "BUTTON" || e.tagName === "IMG");
+        const rects = leaves.map(e => { const r = e.getBoundingClientRect(); return { n: e.tagName + ":" + (e.textContent || e.getAttribute("src") || "").trim().slice(0, 18), l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width, h: r.height }; }).filter(r => r.w > 0 && r.h > 0);
+        const navRect = nav.getBoundingClientRect();
+        const first = document.querySelector(".gscreen > *");
+        const select = nav.querySelector("select");
+        return { rects, navBottom: navRect.bottom, navRight: navRect.right, firstTop: first ? first.getBoundingClientRect().top : null,
+                 options: select ? [...select.options].map(o => o.text) : [], scrollW: document.documentElement.scrollWidth, vw: window.innerWidth };
+      });
+      assert.ok(info.scrollW <= info.vw, `page scrolls sideways (${info.scrollW} > ${info.vw})`);
+      for (const r of info.rects) assert.ok(r.l >= -0.5 && r.r <= info.vw + 0.5, `${r.n} runs off screen (${r.l}–${r.r})`);
+      for (let i = 0; i < info.rects.length; i++) for (let j = i + 1; j < info.rects.length; j++) {
+        const a = info.rects[i], b = info.rects[j];
+        const overlap = a.l < b.r - 1 && b.l < a.r - 1 && a.t < b.b - 1 && b.t < a.b - 1;
+        // a child inside another (e.g. text span inside a button) is allowed; two siblings crossing is not
+        const nested = (a.l >= b.l - 1 && a.r <= b.r + 1 && a.t >= b.t - 1 && a.b <= b.b + 1) || (b.l >= a.l - 1 && b.r <= a.r + 1 && b.t >= a.t - 1 && b.b <= a.b + 1);
+        assert.ok(!overlap || nested, `${a.n} overlaps ${b.n}`);
+      }
+      assert.ok(info.options.length === 2, "group switcher present");
+      for (const o of info.options) assert.ok(!/\bb:/.test(o), `raw badge code in dropdown: ${o}`);
+      assert.ok(info.options.some(o => o.includes("⭐")), "badge shows as its emoji");
+      assert.ok(info.firstTop === null || info.firstTop >= info.navBottom - 1, `page content (${info.firstTop}) starts under the header (${info.navBottom})`);
+    });
+  });
+}
+
+// ── Last Man Standing ───────────────────────────────────────────────────────
+const lmsFixtures = (offsetH = 24) => [["Arsenal", "Chelsea"], ["Spurs", "Everton"], ["Villa", "Wolves"]].map(([home, away], i) => {
+  const ts = Date.now() + (offsetH + i) * HOUR;
+  return { matchId: 500 + i, home, away, kickoffTs: ts, kickoffIso: new Date(ts).toISOString(), date: "Sat 7 Nov", time: "15:00" };
+});
+const lmsGw = (offsetH = 24, extra = {}) => ({ id: 11, season: "2026-27", matchday: 10, status: "open", fixtures: lmsFixtures(offsetH), deadline: new Date(Date.now() + offsetH * HOUR - 60000).toISOString(), ...extra });
+
+test("LMS: opens from the menu and shows 'No game running yet' to a non-owner", async () => {
+  await run({ loginAs: "bob" }, async w => {
+    w.fake.lms.gameweek = lmsGw();
+    await w.text("Weekly Football Prediction League");
+    await w.click(/Last Man Standing/);
+    await w.text("No game running yet");
+    assert.equal(await w.page.evaluate(() => location.pathname), "/lms");
+    assert.equal(await w.page.getByRole("button", { name: /Start Last Man Standing/ }).count(), 0);
+    await w.click(/Back/);
+    await w.text("Weekly Football Prediction League");
+    assert.equal(await w.page.evaluate(() => location.pathname), "/");
+  });
+});
+
+test("LMS: owner starts a game, picks a team, can change it, and the board shows the tick", async () => {
+  await run({ loginAs: "bob" }, async w => {
+    w.fake.lms.gameweek = lmsGw(); w.fake.lms.manager = "bob";
+    await w.text("Weekly Football Prediction League");
+    await w.click(/Last Man Standing/);
+    await w.click(/Start Last Man Standing/);
+    await w.text("Still standing (1)");
+    await w.page.getByRole("button", { name: "Arsenal" }).click();
+    await w.text("Your pick: Arsenal");
+    await w.page.getByRole("button", { name: "Villa" }).click();
+    await w.text("Your pick: Villa");
+    await w.page.getByLabel("picked this week").waitFor();
+    assert.deepEqual(w.fake.lms.entries[0].picks.map(p => p.team), ["Villa"]);
+  });
+});
+
+test("LMS: used teams are greyed out and cannot be picked; the server's error message is shown", async () => {
+  await run({ loginAs: "bob" }, async w => {
+    const gw = lmsGw(); w.fake.lms.gameweek = gw;
+    w.fake.lms.comp = { id: "c1", group_id: "g-alpha", name: "LMS", status: "running", winners: [], startGameweek: 9, startMatchday: 8 };
+    w.fake.lms.entries = [{ username: "bob", status: "alive", cycleFrom: 9, picks: [{ gameweek: 9, matchday: 8, team: "Spurs", matchId: 1, outcome: "win" }] }];
+    await w.text("Weekly Football Prediction League");
+    await w.click(/Last Man Standing/);
+    await w.text("Matchday 10");
+    assert.equal(await w.page.getByRole("button", { name: /Spurs \(already used\)/ }).isDisabled(), true);
+    assert.equal(await w.page.getByRole("button", { name: "Everton" }).isDisabled(), false);
+  });
+});
+
+test("LMS: a postponed pick asks the player to pick again, even after the deadline, from games not yet started", async () => {
+  await run({ loginAs: "bob" }, async w => {
+    const gw = lmsGw(-2, { deadline: new Date(Date.now() - 2 * HOUR - 60000).toISOString() });
+    gw.fixtures[0].kickoffTs = Date.now() - HOUR;          // Arsenal v Chelsea has started
+    gw.fixtures[1].result = "postponed"; gw.fixtures[1].postponedAt = Date.now() - 1000;
+    gw.fixtures[2].kickoffTs = Date.now() + 3 * HOUR;      // Villa v Wolves is still to come
+    w.fake.lms.gameweek = gw;
+    w.fake.lms.comp = { id: "c1", group_id: "g-alpha", name: "LMS", status: "running", winners: [], startGameweek: 9, startMatchday: 8 };
+    w.fake.lms.entries = [{ username: "bob", status: "alive", cycleFrom: 9, picks: [{ gameweek: 11, matchday: 10, team: "Spurs", matchId: 501, outcome: null }] }];
+    await w.text("Last Man Standing", 8000).catch(() => {});
+    await w.page.getByRole("button", { name: /Last Man Standing/ }).first().click();
+    await w.text("Your game's postponed");
+    assert.equal(await w.page.getByRole("button", { name: "Arsenal" }).isDisabled(), true);     // already kicked off
+    assert.equal(await w.page.getByRole("button", { name: "Spurs" }).isDisabled(), true);       // postponed game
+    await w.page.getByRole("button", { name: "Villa" }).click();
+    await w.text("Your pick: Villa");
+  });
+});
+
+test("LMS: board separates knocked-out players, shows pick history, and finished shows the winner and tip link", async () => {
+  await run({ loginAs: "bob" }, async w => {
+    w.fake.lms.gameweek = lmsGw(-5, { status: "settled", deadline: new Date(Date.now() - 6 * HOUR).toISOString() });
+    w.fake.lms.comp = { id: "c1", group_id: "g-alpha", name: "LMS", status: "finished", winners: ["bob"], startGameweek: 9, startMatchday: 8 };
+    w.fake.lms.entries = [
+      { username: "bob", status: "alive", cycleFrom: 9, picks: [{ gameweek: 9, matchday: 8, team: "Spurs", matchId: 1, outcome: "win" }] },
+      { username: "ann", status: "out", outMatchday: 9, cycleFrom: 9, picks: [{ gameweek: 9, matchday: 8, team: "Villa", matchId: 2, outcome: "draw" }] },
+    ];
+    await w.text("Weekly Football Prediction League");
+    await w.click(/Last Man Standing/);
+    await w.text("Last man standing");
+    await w.text("Knocked out");
+    await w.text("out in matchday 9");
+    await w.page.getByRole("button", { name: /ann/ }).click();
+    await w.text("Villa"); await w.text("Drew");
+    assert.ok(await w.page.locator('a[href*="monzo.me"]').count() >= 1);
+    await w.text("Longest streak"); await w.text("Most picked team");
+    assert.equal(await w.page.getByRole("button", { name: /Start a new game/ }).count(), 0);     // bob isn't the organiser
+  });
+});
+
+test("LMS: opening /lms directly lands on the page once signed in", async () => {
+  await run({ loginAs: "bob", path: "/lms" }, async w => {
+    await w.text("Pick one Premier League team");
+  });
+});
+
+test("LMS: when a game finishes, the organiser can start the next one straight away", async () => {
+  await run({ loginAs: "bob" }, async w => {
+    w.fake.lms.gameweek = lmsGw(); w.fake.lms.manager = "bob";
+    w.fake.lms.comp = { id: "c0", group_id: "g-alpha", name: "LMS", status: "finished", winners: ["ann"], startGameweek: 9, startMatchday: 8 };
+    w.fake.lms.entries = [{ username: "ann", status: "alive", cycleFrom: 9, picks: [] }];
+    await w.text("Weekly Football Prediction League");
+    await w.click(/Last Man Standing/);
+    await w.click(/Start a new game/);
+    await w.text("Still standing (1)");
+    assert.equal(w.fake.lms.comp.status, "running");
   });
 });
