@@ -1184,3 +1184,14 @@ test("LMS: when a game finishes, the organiser can start the next one straight a
     assert.equal(w.fake.lms.comp.status, "running");
   });
 });
+
+test("LMS: the page explains how to play", async () => {
+  await run({ loginAs: "bob" }, async w => {
+    w.fake.lms.gameweek = lmsGw();
+    await w.text("Weekly Football Prediction League");
+    await w.click(/Last Man Standing/);
+    await w.page.getByText("How to play", { exact: true }).click();
+    await w.text("You can't pick the same team twice");
+    await w.text("pick again from the games that haven't kicked off yet");
+  });
+});
