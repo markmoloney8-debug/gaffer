@@ -29,6 +29,18 @@ export function lmsStats(entries) {
   return { per, topTeam, topStreak: topStreak && topStreak.best > 0 ? topStreak : null };
 }
 
+const HOW = [
+  "Everyone picks one Premier League team to win each gameweek. A gameweek is one round of fixtures, including midweek rounds.",
+  "If your team wins, you stay in. If it draws or loses, you're out. No pick means you're out too.",
+  "You can't pick the same team twice. Once you've used every team, your list starts again.",
+  "Picks lock 60 seconds before the first kick-off of the gameweek. You can change your pick as often as you like until then.",
+  "Other players' picks stay hidden until the gameweek locks.",
+  "If your team's game is postponed, pick again from the games that haven't kicked off yet, even after the deadline. If you don't, you're out. If there's no later game to switch to, you're safe and the team isn't used up.",
+  "If a whole round is postponed, that gameweek doesn't count.",
+  "If everyone still standing goes out in the same gameweek, they all come back and play on.",
+  "Last player standing wins. Players can join until the first deadline of a game. Knocked-out players can keep following the board.",
+];
+
 export function fmtLeft(ms) {
   if (ms <= 0) return "0s";
   const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
@@ -101,6 +113,12 @@ export default function LmsView({ ui, sb, username, groups, groupId: initialGrou
       <h2 style={S.sectionH2}>Last Man Standing</h2>
       <p style={S.sectionSub}>Pick one Premier League team to win each gameweek. Win and you stay in. Draw, lose or forget and you're out.</p>
     </div>
+    <details style={{width: "100%", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "10px 16px"}}>
+      <summary style={{cursor: "pointer", fontWeight: 700, fontSize: 14}}>How to play</summary>
+      <ol style={{margin: "10px 0 4px 18px", fontSize: 14, lineHeight: 1.55, color: "var(--text)", display: "flex", flexDirection: "column", gap: 6}}>
+        {HOW.map((t, i) => <li key={i}>{t}</li>)}
+      </ol>
+    </details>
     {groups.length > 1 && (
       <select value={gid || ""} onChange={e => setGid(e.target.value)} aria-label="Group" style={{...S.input, maxWidth: 360}}>
         {groups.map(g => <option key={g.id} value={g.id}>{gLabel(g)}</option>)}
