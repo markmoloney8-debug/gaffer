@@ -32,6 +32,11 @@ Then: `npm i -D playwright esbuild` and `npx playwright install chromium`.
 - Changed a database rule: add a case to `tests/sql/hardening.test.sql`.
 - The ADMIN_PIN in the browser tests must match `src/App.jsx`.
 
+## Last Man Standing
+- `tests/unit/lms.test.cjs` covers `scripts/lms.js` (results, postponements, deadlines, next matchday, settle-once) with a fake `fetch`.
+- Try the script safely any time: `node scripts/lms.js --dry-run` (needs `FOOTBALL_DATA_TOKEN`, `SB_URL`, `SB_KEY`), or run the workflow by hand and tick "Dry run".
+- The page tests are at the end of `tests/e2e/app.e2e.test.mjs`; the fake database implements `lms_state`, `lms_start`, `lms_join` and `lms_pick` in a simplified form. The real rules live in the database.
+
 ## Not covered yet
 - Real football-data.org responses (the tests use made-up matches shaped like the API).
 - Real Supabase behaviour (the fake and the local Postgres approximate it).
