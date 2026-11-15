@@ -68,7 +68,7 @@ export async function newWorld(browser, bundle, { loginAs, setup, kickoff = 48 *
     const url = route.request().url();
     if (url.includes("/rest/v1/")) return fake.handle(route);
     if (url.includes("/auth/v1/") || url.includes("/functions/v1/")) return fake.handleAuth(route);
-    { const u = new URL(url); if (u.origin + u.pathname === ORIGIN + "/") return route.fulfill({ status: 200, contentType: "text/html", body: HTML }); }
+    { const u = new URL(url); if (u.origin + u.pathname === ORIGIN + "/" || u.origin + u.pathname === ORIGIN + "/lms") return route.fulfill({ status: 200, contentType: "text/html", body: HTML }); }
     if (url === ORIGIN + "/app.js") return route.fulfill({ status: 200, contentType: "application/javascript", body: bundle });
     return route.abort();                                // fonts and anything else external
   });

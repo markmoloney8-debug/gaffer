@@ -37,8 +37,10 @@ jobs:
           $PSQL -d gaffer_test -f tests/sql/auth-stub.sql
           $PSQL -d gaffer_test -f auth/auth.sql
           $PSQL -d gaffer_test -f tests/sql/auth.test.sql
+          $PSQL -d gaffer_test -f auth/recovery.sql
+          $PSQL -d gaffer_test -f tests/sql/recovery.test.sql
       - name: Setup scripts are safe to run twice
-        run: for f in history-setup.sql hardening.sql auth/auth.sql; do $PSQL -d gaffer_test -f $f; done
+        run: for f in history-setup.sql hardening.sql auth/auth.sql auth/recovery.sql; do $PSQL -d gaffer_test -f $f; done
 
   browser:
     runs-on: ubuntu-latest
