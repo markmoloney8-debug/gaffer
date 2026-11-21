@@ -17,6 +17,7 @@ try { cfg = require("./config.js"); } catch (e) { /* no local config: rely on en
 const MIN = 60 * 1000;
 const DAY = 24 * 60 * MIN;
 const DEADLINE_LEAD = 60 * 1000;       // picks lock 60s before the first kick-off
+const OVER_AFTER = 115 * MIN;          // a match is surely finished this long after kick-off
 const RESCHEDULE_LIMIT = 4 * DAY;      // moved more than this after the round's first game = postponed
 const FD_BASE = "https://api.football-data.org/v4";
 
@@ -111,7 +112,9 @@ function nextMatchday(matches, lastMatchday, now) {
 
 // ── I/O ─────────────────────────────────────────────────────────────────────
 
-function makeRunner({ env = process.env, fetchFn = fetch, now = Date.now(), dryRun = false, log = console.log } = {}) {
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function makeRunner({ env = process.env, fetchFn = fetch, now = Date.now(), dryRun = false, log = console.log, sleepFn = sleep } = {}) {
   const TOKEN = env.FOOTBALL_DATA_TOKEN || cfg.FOOTBALL_DATA_TOKEN;
   const SB_URL = env.SB_URL || cfg.SB_URL;
   const SB_KEY = env.SB_KEY || cfg.SB_KEY;
@@ -154,8 +157,20 @@ function makeRunner({ env = process.env, fetchFn = fetch, now = Date.now(), dryR
       const first = Math.min(...fixtures.map(f => f.kickoffTs));
       const data = await fdGet(`/competitions/PL/matches?dateFrom=${new Date(first - DAY).toISOString().slice(0, 10)}&dateTo=${new Date(first + 10 * DAY).toISOString().slice(0, 10)}`);
       const byId = new Map((data.matches || []).map(m => [m.id, m]));
+
+      // The list request can lag behind. For any match that should be over by now but isn't marked finished,
+      // ask for that one match directly, which is more up to date. (The free plan allows 10 calls a minute.)
+      const overdue = fixtures.filter(f => !f.result && f.kickoffTs + OVER_AFTER < now && (!byId.get(f.matchId) || byId.get(f.matchId).status !== "FINISHED"));
+      for (const f of overdue) {
+        try {
+          const one = await fdGet(`/matches/${f.matchId}`);
+          if (one && one.id) { log(`  ${f.home} vs ${f.away}: list said ${byId.get(f.matchId) ? byId.get(f.matchId).status : "missing"}, direct lookup says ${one.status}`); byId.set(f.matchId, one); }
+        } catch (e) { log(`  ${f.home} vs ${f.away}: direct lookup failed (${e.message})`); }
+        await sleepFn(7000);
+      }
+
       const { fixtures: fresh, changed } = refreshFixtures(fixtures, byId, now, log);
-      fresh.forEach(f => log(`  ${f.home} vs ${f.away}: ${f.result || "not final yet"}`));
+      fresh.forEach(f => { const m = byId.get(f.matchId); log(`  ${f.home} vs ${f.away}: ${f.result || "not final yet"}${m ? ` (feed: ${m.status})` : ""}`); });
 
       const deadlinePassed = now >= Date.parse(latest.deadline);
       const patch = {};
