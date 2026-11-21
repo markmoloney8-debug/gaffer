@@ -76,19 +76,20 @@ test("allResultsIn", () => {
 });
 
 // ── end to end with a fake fetch ────────────────────────────────────────────
-function harness({ rows, matches, now = NOW }) {
+function harness({ rows, matches, now = NOW, direct }) {
   const calls = [];
   const fetchFn = async (url, opt = {}) => {
     const method = opt.method || "GET";
     calls.push({ url, method, body: opt.body && JSON.parse(opt.body) });
     const ok = b => ({ ok: true, status: 200, text: async () => JSON.stringify(b), json: async () => b });
+    if (/football-data.org\/v4\/matches\/\d+/.test(url)) { const one = (direct || {})[url.split("/").pop()]; return one ? ok(one) : { ok: false, status: 404, text: async () => "no" }; }
     if (url.includes("football-data.org")) return ok({ matches });
     if (url.includes("/rpc/lms_settle")) return ok({ settled: true });
     if (method === "GET") return ok(rows);
     return { ok: true, status: 204, text: async () => "", json: async () => null };
   };
   const logs = [];
-  const run = dryRun => lms.makeRunner({ env: { FOOTBALL_DATA_TOKEN: "t", SB_URL: "http://sb", SB_KEY: "k" }, fetchFn, now, dryRun, log: s => logs.push(s) }).run();
+  const run = dryRun => lms.makeRunner({ env: { FOOTBALL_DATA_TOKEN: "t", SB_URL: "http://sb", SB_KEY: "k" }, fetchFn, now, dryRun, log: s => logs.push(s), sleepFn: async () => {} }).run();
   return { calls, logs, run };
 }
 
@@ -132,4 +133,16 @@ test("script: settled latest -> adds the following matchday, never re-settles", 
   const r = await h.run(false);
   assert.equal(r.matchday, 11);
   assert.ok(!h.calls.some(c => c.url.includes("lms_settle")));
+});
+
+test("script: when the list lags (says not finished) a direct lookup of an overdue match still records the result", async () => {
+  const rows = [{ id: 12, season: "2026-27", matchday: 12, status: "open", deadline: new Date(NOW - 6 * H).toISOString(), fixtures: [fx(1, -5), fx(2, 40)] }];
+  const matches = [m(1, 12, -5, { status: "TIMED" }), m(2, 12, 40)];                         // the list is stale
+  const direct = { 1: m(1, 12, -5, { status: "FINISHED", score: { fullTime: { home: 1, away: 1 } } }) };
+  const h = harness({ rows, matches, direct }); await h.run(false);
+  const patch = h.calls.find(c => c.method === "PATCH");
+  assert.equal(patch.body.fixtures[0].result, "draw");
+  assert.equal(patch.body.fixtures[1].result, undefined, "a match that has not kicked off is left alone");
+  assert.equal(h.calls.filter(c => /v4\/matches\/\d+/.test(c.url)).length, 1, "only the overdue match is looked up");
+  assert.ok(h.logs.some(l => /list said TIMED, direct lookup says FINISHED/.test(l)));
 });
