@@ -116,8 +116,11 @@ export function createFakeSupabase() {
       if (req.method() === "DELETE") {
         const test = predicate(url.searchParams);
         const before = tables[table].length;
-        tables[table] = tables[table].filter(r => !test(r));
+        const blocked = hooks.blockDelete && hooks.blockDelete[table];          // simulates the database quietly refusing (e.g. entries locked)
+        const removed = blocked ? [] : tables[table].filter(r => test(r));
+        if (!blocked) tables[table] = tables[table].filter(r => !test(r));
         log.push({ method: "DELETE", table, count: before - tables[table].length });
+        if ((req.headers()["prefer"] || "").includes("return=representation")) return json(200, removed);
         return route.fulfill({ status: 204, headers: cors });
       }
     } catch (e) {

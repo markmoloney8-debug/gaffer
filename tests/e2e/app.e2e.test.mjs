@@ -1195,3 +1195,81 @@ test("LMS: the page explains how to play", async () => {
     await w.text("pick again from the games that haven't kicked off yet");
   });
 });
+
+// ── Deleting an entry ───────────────────────────────────────────────────────
+const twoEntries = t => t.submissions.push(
+  seeEntry("ann", "g-alpha", "Entry 1", "home", "draw", "away", "home", "draw"),
+  seeEntry("ann", "g-alpha", "Entry 2", "away", "draw", "away", "home", "draw"),
+  seeEntry("bob", "g-alpha", "Entry 1", "home", "home", "home", "home", "home"));
+
+test("delete: asks first; 'Keep it' changes nothing; 'Yes, delete' removes only that entry", async () => {
+  await run({ loginAs: "ann", setup: twoEntries }, async w => {
+    await w.click(/My Predictions/);
+    await w.click("Delete Entry 1");
+    await w.text("Delete Entry 1?");
+    await w.click(/Keep it/);
+    assert.equal(w.tables.submissions.filter(s => s.username === "ann").length, 2);
+    await w.click("Delete Entry 1");
+    await w.click("Yes, delete Entry 1");
+    await w.page.getByRole("button", { name: "Delete Entry 1" }).waitFor({ state: "hidden" });
+    const left = w.tables.submissions.filter(s => s.username === "ann");
+    assert.deepEqual(left.map(s => s.entry_name), ["Entry 2"]);
+    assert.equal(w.tables.submissions.filter(s => s.username === "bob").length, 1, "other players are untouched");
+  });
+});
+
+test("delete: freeing a slot lets you add again, and the new entry gets a name that is not already taken", async () => {
+  await run({ loginAs: "ann", setup: twoEntries }, async w => {
+    await w.click(/My Predictions/);
+    await w.click("Delete Entry 1");
+    await w.click("Yes, delete Entry 1");
+    await w.page.getByRole("button", { name: "Delete Entry 1" }).waitFor({ state: "hidden" });
+    await w.click(/Add Entry/);
+    await sealEntry(w, "home", "home", "home", "home", "away");
+    await w.text("Entry sealed");
+    assert.deepEqual(w.tables.submissions.filter(s => s.username === "ann").map(s => s.entry_name).sort(), ["Entry 1", "Entry 2"]);
+  });
+});
+
+test("delete: if the database refuses (entries just locked) the player is told and the entry stays", async () => {
+  await run({ loginAs: "ann", setup: twoEntries }, async w => {
+    await w.click(/My Predictions/);
+    w.fake.hooks.blockDelete = { submissions: true };
+    await w.click("Delete Entry 1");
+    await w.click("Yes, delete Entry 1");
+    await w.text("Couldn't delete that entry");
+    assert.equal(w.tables.submissions.filter(s => s.username === "ann").length, 2);
+  });
+});
+
+// ── Seeing everyone's picks once entries lock ───────────────────────────────
+const picksSetup = t => t.submissions.push(
+  seeEntry("ann", "g-alpha", "Entry 1", "home", "home", "home", "home", "home"),
+  seeEntry("bob", "g-alpha", "Entry 1", "away", "draw", "home", "away", "home"));
+
+test("lobby picks: before entries lock there is no way to view anyone's picks", async () => {
+  await run({ loginAs: "ann", setup: picksSetup }, async w => {
+    await w.click(/Lobby/);
+    await w.text("Players In");
+    assert.equal(await w.page.getByRole("button", { name: /View picks/ }).count(), 0);
+  });
+});
+
+test("lobby picks: once locked, anyone can open another player's picks, ticked or crossed as results come in", async () => {
+  await run({ loginAs: "ann", setup: picksSetup, kickoff: locked, results: R("home", "home", "upcoming", "upcoming", "upcoming") }, async w => {
+    await w.click(/Lobby/);
+    await w.page.getByRole("button", { name: "View picks for bob" }).click();
+    const box = w.page.getByLabel("bob Entry 1 picks");
+    await box.waitFor();
+    const text = await box.innerText();
+    assert.match(text, /✗ .* win/);        // match 1: bob said away, result home
+    assert.match(text, /Draw/);             // match 2: he said draw, result home -> wrong
+    assert.equal((text.match(/✗/g) || []).length, 2, "two finished matches, both wrong for bob");
+    assert.equal((text.match(/✓/g) || []).length, 0);
+    await w.page.getByRole("button", { name: "View picks for ann" }).click();
+    const mine = await w.page.getByLabel("ann Entry 1 picks").innerText();
+    assert.equal((mine.match(/✓/g) || []).length, 2, "both of ann's finished picks were right");
+    await w.page.getByRole("button", { name: "Hide picks for bob" }).click();
+    await box.waitFor({ state: "hidden" });
+  });
+});
