@@ -73,8 +73,15 @@ function mapResults(fixtures, prevResults, byId, log = console.log) {
     if (prev[i] && prev[i].result === "void") return prev[i];
     const label = `${f.home} vs ${f.away}`;
     const m = byId.get(f.matchId);
-    if (!m) { log(`  WARNING: ${label} not found in football-data.org response.`); return { result: "upcoming", score: null }; }
-    return resultFor(m, label, log);
+    const had = prev[i] && ["home", "away", "draw"].includes(prev[i].result) ? prev[i] : null;   // a result we already saved
+    if (!m) {
+      log(`  WARNING: ${label} not found in football-data.org response.${had ? " Keeping the saved result." : ""}`);
+      return had || { result: "upcoming", score: null };
+    }
+    const now = resultFor(m, label, log);
+    // Never let a glitchy or late feed wipe out a result that was already saved.
+    if (had && now.result === "upcoming") { log(`  WARNING: ${label} came back as not finished, but a result was already saved. Keeping ${had.score} (${had.result}).`); return had; }
+    return now;
   });
 }
 
