@@ -367,6 +367,11 @@ const db = {
   async addSub(username, entryName, preds, groupId) {
     return sb.insert("submissions", { username, entry_name: entryName, preds, group_id: groupId }, true);
   },
+  // Returns an error when nothing was deleted (the database quietly skips rows you may not delete, e.g. once entries have locked).
+  async deleteSub(id) {
+    const gone = await sbFetch(`submissions?id=eq.${id}`, { method: "DELETE", headers: REP });
+    if (!gone || !gone.length) throw new Error("not deleted");
+  },
   async updateSubPreds(id, preds) {
     return sb.patch("submissions", `id=eq.${id}`, { preds });
   },
@@ -708,6 +713,8 @@ export default function App() {
   const [preds,     setPreds]     = useState({});
   const [entryView, setEntryView] = useState("list");
   const [submitDone,setSubmitDone]= useState(false);
+  const [openPicks, setOpenPicks] = useState({});        // lobby: which players' picks are expanded
+  const [confirmDel, setConfirmDel] = useState(null);   // id of the entry awaiting "Yes, delete"
   const [editing,   setEditing]   = useState(null);   // the entry being edited, or null when making a new one
 
   // ── Theme ─────────────────────────────────────────────────────────────────
@@ -1020,11 +1027,20 @@ export default function App() {
     setLoading(true); setLoadMsg(editing?"Saving changes…":"Sealing entry…");
     try {
       if (editing) await db.updateSubPreds(editing.id, { 0:preds[0], 1:preds[1], 2:preds[2], 3:preds[3], 4:preds[4] });
-      else await db.addSub(username, `Entry ${myEntries.length+1}`, preds, groupId);   // auto-named, no typing needed
+      else { let n = 1; while (myEntries.some(x=>x.entryName===`Entry ${n}`)) n++; await db.addSub(username, `Entry ${n}`, preds, groupId); }   // auto-named, no typing needed
       const s = await db.getSubs(groupId);
       setSubs(s);
       setPreds({}); setEntryName(""); setEntryView("list"); setSubmitDone(editing?"updated":true); setEditing(null);
     } catch { setError(editing?"Couldn't save your changes. If entries have just closed, they can't be changed now.":"Couldn't save entry — try again."); }
+    setLoading(false);
+  }
+
+  async function deleteEntry(e) {
+    setError(""); setLoading(true); setLoadMsg("Deleting entry…");
+    try {
+      await db.deleteSub(e.id);
+      setSubs(await db.getSubs(groupId)); setConfirmDel(null); setSubmitDone(false);
+    } catch { setError("Couldn't delete that entry. If entries have just closed, it can't be removed now."); }
     setLoading(false);
   }
 
@@ -1376,6 +1392,7 @@ export default function App() {
         <Screen wide>
           <BackBtn onClick={()=>setView("home")}/>
           <SectionTitle eyebrow={`${round.league.flag} ${round.league.name} · ${roundDates(round)}`} title="My Entries" sub={`${myEntries.length} / ${MAX_ENTRIES} entries used`}/>
+          {error&&<ErrorBox>{error}</ErrorBox>}
           {myEntries.length>0&&(
             <div style={{width:"100%",marginBottom:8}}>
               {myEntries.map((e,i)=>(
@@ -1397,6 +1414,15 @@ export default function App() {
                     </div>
                   </div>
                   <button onClick={()=>{setEditing(e);setPreds({0:e.preds[0],1:e.preds[1],2:e.preds[2],3:e.preds[3],4:e.preds[4]});setError("");setSubmitDone(false);setEntryView("new");}} aria-label={`Edit ${e.entryName}`} style={{alignSelf:"flex-start",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,color:"var(--text)",fontSize:12,fontWeight:600,padding:"6px 10px",cursor:"pointer"}}>✏️ Edit</button>
+                  {confirmDel===e.id?(
+                    <div style={{alignSelf:"flex-start",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                      <span style={{fontSize:12,color:"var(--danger-text)"}}>Delete {e.entryName}?</span>
+                      <button onClick={()=>deleteEntry(e)} aria-label={`Yes, delete ${e.entryName}`} style={{background:"rgba(248,113,113,0.12)",border:"1px solid rgba(248,113,113,0.4)",borderRadius:8,color:"var(--danger-text)",fontSize:12,fontWeight:700,padding:"6px 10px",cursor:"pointer"}}>Yes, delete</button>
+                      <button onClick={()=>setConfirmDel(null)} style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,color:"var(--text)",fontSize:12,fontWeight:600,padding:"6px 10px",cursor:"pointer"}}>Keep it</button>
+                    </div>
+                  ):(
+                    <button onClick={()=>{setConfirmDel(e.id);setError("");}} aria-label={`Delete ${e.entryName}`} style={{alignSelf:"flex-start",background:"transparent",border:"1px solid var(--border)",borderRadius:8,color:"var(--muted)",fontSize:12,fontWeight:600,padding:"6px 10px",cursor:"pointer"}}>🗑 Delete</button>
+                  )}
                 </div>
               ))}
             </div>
@@ -1528,19 +1554,49 @@ export default function App() {
             <div style={S.sectionLabel}>Players In</div>
             {(()=>{
               const players=[...new Set(subs.map(s=>s.username))];
+              const picksOut = round.locked||deadlineLocked;          // everyone's picks are released once entries close
               if (!players.length) return <div style={{color:"var(--muted)",fontSize:13,textAlign:"center",padding:"16px 0"}}>No entries yet.</div>;
               return (
                 <div style={{display:"flex",flexDirection:"column",gap:7}}>
                   {players.map(p=>{
                     const pe=subs.filter(s=>s.username===p);
                     return (
-                      <div key={p} style={S.playerRow}>
+                      <div key={p}>
+                      <div style={S.playerRow}>
                         <Avatar name={p}/>
                         <div style={{flex:1}}>
                           <div style={{fontWeight:600,fontSize:14}}>{p}</div>
                           <div style={{fontSize:11,color:"var(--muted)"}}>{pe.length} entr{pe.length!==1?"ies":"y"}</div>
                         </div>
-                        <span style={{color:"var(--muted)"}} aria-label="locked"><Ico n="lock" size={14} mr={0}/></span>
+                        {picksOut
+                          ?<button onClick={()=>setOpenPicks(o=>({...o,[p]:!o[p]}))} aria-expanded={!!openPicks[p]} aria-label={`${openPicks[p]?"Hide":"View"} picks for ${p}`}
+                              style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:8,color:"var(--text)",fontSize:12,fontWeight:600,padding:"6px 10px",cursor:"pointer"}}>
+                              {openPicks[p]?"Hide picks":"View picks"}
+                            </button>
+                          :<span style={{color:"var(--muted)"}} aria-label="locked"><Ico n="lock" size={14} mr={0}/></span>}
+                      </div>
+                      {picksOut&&openPicks[p]&&(
+                        <div style={{display:"flex",flexDirection:"column",gap:8,margin:"-2px 0 4px 0",padding:"10px 12px",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:8}}>
+                          {pe.map(e=>(
+                            <div key={e.id} aria-label={`${p} ${e.entryName} picks`}>
+                              <div style={{fontSize:12,fontWeight:700,marginBottom:4}}>{e.entryName}</div>
+                              {round.fixtures.map((f,fi)=>{
+                                const k=e.preds[String(fi)]||e.preds[fi];
+                                const r=round.results&&round.results[fi]&&round.results[fi].result;
+                                const done=r&&r!=="upcoming";
+                                const right=done&&(r==="void"||r===k);
+                                const label=k==="home"?`${f.home} win`:k==="away"?`${f.away} win`:k==="draw"?"Draw":"Pick needed";
+                                return (
+                                  <div key={fi} style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:12,lineHeight:1.5}}>
+                                    <span style={{color:"var(--muted)"}}>{f.home} v {f.away}</span>
+                                    <span style={{fontWeight:600,textAlign:"right",color:done?(right?"var(--green)":"var(--danger-text)"):"var(--text)"}}>{done?(right?"✓ ":"✗ "):""}{label}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       </div>
                     );
                   })}
