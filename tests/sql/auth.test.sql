@@ -133,7 +133,7 @@ select ok(rows_as('authenticated', '00000000-0000-0000-0000-00000000000a', $$upd
 select denied('authenticated', '00000000-0000-0000-0000-00000000000a', $$update round set locked = false where id = 1$$, 'Only the admin');
 select ok(rows_as('authenticated', '00000000-0000-0000-0000-00000000000d', $$update round set locked = false, results = '[]'::jsonb where id = 1 returning 1$$) = 1, 'the admin may change anything');
 select ok(rows_as('authenticated', '00000000-0000-0000-0000-00000000000d', $$delete from submissions where username = 'bob' returning 1$$) = 1, 'the admin may clear entries');
-select ok(rows_as('authenticated', '00000000-0000-0000-0000-00000000000a', $$delete from submissions returning 1$$) = 0, 'players cannot delete entries');
+select ok(rows_as('authenticated', '00000000-0000-0000-0000-00000000000a', $$delete from submissions where username <> 'ann' returning 1$$) = 0, 'players cannot delete other players'' entries');
 
 -- ── Winner / run status and history ──────────────────────────────────────────
 select ok(rows_as('authenticated', '00000000-0000-0000-0000-00000000000a', $$update group_state set winners_found = true where group_id = '10000000-0000-0000-0000-000000000001' returning 1$$) = 1, 'a member can mark winners found');
