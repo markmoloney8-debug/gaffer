@@ -324,3 +324,22 @@ test("toFixture adds form only when finished matches are supplied", () => {
   const f = toFixture(m, [fm(1, "2026-10-01T15:00:00Z", 1, 5, 2, 0), fm(2, "2026-10-08T15:00:00Z", 6, 2, 3, 0)]);
   assert.deepEqual(f.form, { home: ["W"], away: ["L"] });
 });
+
+test("mapResults never downgrades a saved result when the feed later says not finished or drops the match", () => {
+  const fx = [{ matchId: 1, home: "H1", away: "A1" }, { matchId: 2, home: "H2", away: "A2" }, { matchId: 3, home: "H3", away: "A3" }];
+  const prev = [{ result: "home", score: "2-0" }, { result: "draw", score: "1-1" }, { result: "upcoming", score: null }];
+  const byId = new Map([[1, { id: 1, status: "IN_PLAY" }]]);          // match 1 reported not finished; match 2 missing; match 3 missing
+  const logs = [];
+  const out = results.mapResults(fx, prev, byId, m => logs.push(m));
+  assert.deepEqual(out[0], { result: "home", score: "2-0" });
+  assert.deepEqual(out[1], { result: "draw", score: "1-1" });
+  assert.deepEqual(out[2], { result: "upcoming", score: null });
+  assert.equal(logs.filter(l => /Keeping/.test(l)).length, 2);
+});
+
+test("mapResults still takes a corrected final score from the feed", () => {
+  const fx = [{ matchId: 1, home: "H1", away: "A1" }];
+  const prev = [{ result: "draw", score: "1-1" }];
+  const byId = new Map([[1, { id: 1, status: "FINISHED", score: { fullTime: { home: 2, away: 1 } } }]]);
+  assert.deepEqual(results.mapResults(fx, prev, byId, () => {})[0], { result: "home", score: "2-1" });
+});
