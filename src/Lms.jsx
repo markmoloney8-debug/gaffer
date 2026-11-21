@@ -41,6 +41,18 @@ const HOW = [
   "Last player standing wins. Players can join until the first deadline of a game. Knocked-out players can keep following the board.",
 ];
 
+// How a player's pick for the current gameweek is doing: 'win' | 'out' | 'pending' | 'postponed' | 'none'.
+export function pickState(entry, gw) {
+  if (!gw) return { state: "none", team: null };
+  const p = (entry.picks || []).find(x => x.gameweek === gw.id && x.team);
+  if (!p) return { state: "none", team: null };
+  const f = (gw.fixtures || []).find(x => x.matchId === p.matchId);
+  if (!f || !f.result) return { state: "pending", team: p.team };
+  if (f.result === "postponed") return { state: "postponed", team: p.team };
+  const won = (f.result === "home" && p.team === f.home) || (f.result === "away" && p.team === f.away);
+  return { state: won ? "win" : "out", team: p.team };
+}
+
 export function fmtLeft(ms) {
   if (ms <= 0) return "0s";
   const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
@@ -245,7 +257,7 @@ export default function LmsView({ ui, sb, username, groups, groupId: initialGrou
       {comp && (
         <div style={card}>
           <div style={{fontWeight: 700, marginBottom: 8}}>Still standing ({entries.filter(e => e.status === "alive").length})</div>
-          {entries.filter(e => e.status === "alive").map(e => <Row key={e.username} e={e} gw={gw} open={open} setOpen={setOpen} AvatarBubble={AvatarBubble} showTick={running && gwOpen} best={(stats.per.find(x => x.username === e.username) || {}).best}/>)}
+          {entries.filter(e => e.status === "alive").map(e => <Row key={e.username} e={e} gw={gw} open={open} setOpen={setOpen} AvatarBubble={AvatarBubble} showTick={running && gwOpen && before} live={running && gwOpen && !before ? gw : null} best={(stats.per.find(x => x.username === e.username) || {}).best}/>)}
           {entries.some(e => e.status === "out") && <div style={{fontWeight: 700, margin: "14px 0 8px", color: "var(--muted)"}}>Knocked out</div>}
           {entries.filter(e => e.status === "out").map(e => <Row key={e.username} e={e} gw={gw} open={open} setOpen={setOpen} AvatarBubble={AvatarBubble} out/>)}
           {!entries.length && <div style={{color: "var(--muted)", fontSize: 14}}>Nobody has joined yet.</div>}
@@ -255,7 +267,16 @@ export default function LmsView({ ui, sb, username, groups, groupId: initialGrou
   );
 }
 
-function Row({ e, gw, open, setOpen, AvatarBubble, out, showTick, best }) {
+const PICK_STYLE = {
+  win:       { c: "var(--green)",       bg: "rgba(52,211,153,0.14)", t: "" },
+  out:       { c: "var(--danger-text)", bg: "rgba(248,113,113,0.14)", t: "" },
+  pending:   { c: "var(--text)",        bg: "var(--surface2)", t: "" },
+  postponed: { c: "var(--muted)",       bg: "var(--surface2)", t: "postponed" },
+  none:      { c: "var(--danger-text)", bg: "rgba(248,113,113,0.14)", t: "No pick" },
+};
+
+function Row({ e, gw, open, setOpen, AvatarBubble, out, showTick, live, best }) {
+  const ps = live ? pickState(e, live) : null;
   const isOpen = !!open[e.username];
   const picks = e.picks || [];
   return (
@@ -266,6 +287,10 @@ function Row({ e, gw, open, setOpen, AvatarBubble, out, showTick, best }) {
         <span style={{flex: 1, fontWeight: 600, opacity: out ? 0.75 : 1}}>{e.username}</span>
         {out && <span style={{fontSize: 12, color: "var(--muted)"}}>out in matchday {e.outMatchday}</span>}
         {showTick && e.pickedThisWeek && <span aria-label="picked this week" style={{color: "var(--green)", fontWeight: 800}}>✓</span>}
+        {ps && (() => { const st = PICK_STYLE[ps.state]; return (
+          <span aria-label={`${e.username}'s pick: ${ps.team || "none"}, ${ps.state}`} style={{fontSize: 12, fontWeight: 700, padding: "3px 8px", borderRadius: 999, background: st.bg, color: st.c, whiteSpace: "nowrap"}}>
+            {ps.state === "win" ? "✓ " : ps.state === "out" ? "✗ " : ""}{ps.team ? ps.team : st.t}{ps.team && st.t ? ` (${st.t})` : ""}
+          </span>); })()}
         <span aria-hidden style={{color: "var(--muted)", fontSize: 12}}>{isOpen ? "▲" : "▼"}</span>
       </button>
       {isOpen && (
