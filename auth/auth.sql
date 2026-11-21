@@ -122,7 +122,16 @@ grant delete on submissions to authenticated;
 create policy sub_read   on submissions for select to authenticated using (username = me() or is_admin());
 create policy sub_insert on submissions for insert to authenticated with check (username = me());
 create policy sub_update on submissions for update to authenticated using (username = me()) with check (username = me());
-create policy sub_delete on submissions for delete to authenticated using (is_admin());
+-- A player may delete their own entry while entries are open; the admin may delete any (see also delete-entry.sql).
+create or replace function entries_open() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(
+    (select (extract(epoch from now()) * 1000)::bigint < min((f->>'kickoffTs')::bigint) - 60000
+       from round r, jsonb_array_elements(r.fixtures) f where r.id = 1),
+    true)
+$$;
+grant execute on function entries_open() to authenticated;
+create policy sub_delete on submissions for delete to authenticated using (is_admin() or (username = me() and entries_open()));
 
 -- history
 grant select on history to authenticated;
