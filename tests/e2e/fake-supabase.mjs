@@ -108,6 +108,10 @@ export function createFakeSupabase() {
       if (req.method() === "PATCH") {
         const patch = JSON.parse(req.postData());
         const rows = tables[table].filter(predicate(url.searchParams));
+        if (table === "round" && !tables.admins.some(a => a.username === callerOf(req))) {      // mirrors the database's round_guard trigger
+          const onlyLocking = Object.keys(patch).every(k => k === "locked") && patch.locked === true;
+          if (rows.some(r => r.locked === true) || !onlyLocking) return json(400, { code: "P0001", message: "Only the admin can change the round" });
+        }
         rows.forEach(r => Object.assign(r, patch));
         log.push({ method: "PATCH", table, patch, count: rows.length });
         return json(200, rows);

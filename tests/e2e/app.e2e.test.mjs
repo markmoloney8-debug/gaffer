@@ -1138,9 +1138,9 @@ test("LMS: a postponed pick asks the player to pick again, even after the deadli
     await w.text("Last Man Standing", 8000).catch(() => {});
     await w.page.getByRole("button", { name: /Last Man Standing/ }).first().click();
     await w.text("Your game's postponed");
-    assert.equal(await w.page.getByRole("button", { name: "Arsenal" }).isDisabled(), true);     // already kicked off
-    assert.equal(await w.page.getByRole("button", { name: "Spurs" }).isDisabled(), true);       // postponed game
-    await w.page.getByRole("button", { name: "Villa" }).click();
+    assert.equal(await w.page.getByRole("button", { name: "Arsenal", exact: true }).isDisabled(), true);     // already kicked off
+    assert.equal(await w.page.getByRole("button", { name: "Spurs", exact: true }).isDisabled(), true);       // postponed game
+    await w.page.getByRole("button", { name: "Villa", exact: true }).click();
     await w.text("Your pick: Villa");
   });
 });
@@ -1271,5 +1271,42 @@ test("lobby picks: once locked, anyone can open another player's picks, ticked o
     assert.equal((mine.match(/✓/g) || []).length, 2, "both of ann's finished picks were right");
     await w.page.getByRole("button", { name: "Hide picks for bob" }).click();
     await box.waitFor({ state: "hidden" });
+  });
+});
+
+test("LMS: after the deadline the board shows each pick, green for a win, red for a draw or loss, plain while pending", async () => {
+  await run({ loginAs: "bob" }, async w => {
+    const gw = lmsGw(-2, { deadline: new Date(Date.now() - 2 * HOUR - 60000).toISOString() });
+    gw.fixtures[0].result = "draw";            // Arsenal v Chelsea drew
+    gw.fixtures[1].result = "home";            // Spurs beat Everton
+    w.fake.lms.gameweek = gw;
+    w.fake.lms.comp = { id: "c1", group_id: "g-alpha", name: "LMS", status: "running", winners: [], startGameweek: 9, startMatchday: 8 };
+    const pick = (team, matchId) => [{ gameweek: 11, matchday: 10, team, matchId, outcome: null }];
+    w.fake.lms.entries = [
+      { username: "bob", status: "alive", cycleFrom: 9, picks: pick("Arsenal", 500) },
+      { username: "ann", status: "alive", cycleFrom: 9, picks: pick("Spurs", 501) },
+      { username: "cat", status: "alive", cycleFrom: 9, picks: pick("Villa", 502) },
+      { username: "dan", status: "alive", cycleFrom: 9, picks: [] },
+    ];
+    await w.text("Weekly Football Prediction League");
+    await w.click(/Last Man Standing/);
+    await w.text("Still standing (4)");
+    const label = u => w.page.locator(`[aria-label^="${u}'s pick"]`).getAttribute("aria-label");
+    assert.match(await label("bob"), /Arsenal, out/);
+    assert.match(await label("ann"), /Spurs, win/);
+    assert.match(await label("cat"), /Villa, pending/);
+    assert.match(await label("dan"), /none, none/);
+    assert.equal(await w.page.getByLabel("picked this week").count(), 0, "the tick is only for before the deadline");
+  });
+});
+
+test("reveal: a non-admin can open the reveal even when the round is already locked (the database only lets the admin re-lock it)", async () => {
+  const setup = t => t.submissions.push(seeEntry("bob", "g-alpha", "Entry 1", "home", "home", "home", "home", "home"));
+  await run({ loginAs: "bob", setup, kickoff: locked, results: R("home", "home", "home", "home", "home") }, async w => {
+    w.tables.round[0].locked = true;                       // someone has already opened the reveal
+    await w.click(/Lobby/);
+    await w.click(/Check Results/);
+    await w.text("All 5 results in");
+    assert.equal(await w.page.getByText(/Couldn't load results/).count(), 0);
   });
 });
