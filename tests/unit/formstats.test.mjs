@@ -26,3 +26,36 @@ test("lastWeek uses the latest week, best entry per player", () => {
   assert.equal(lastWeek([]),null);
   assert.equal(lastWeek([h(9,"a",1,1),h(1,"a",3,2)]).week,1);   // a newer run beats a higher week number
 });
+import { matchPreviews, lmsBest, pickTypeRecord, teamRecord, formPoints, ordinal } from "../../src/formstats.js";
+const TF = [
+  { team: "A", position: 1, last5: "WWWWW", home: { w: 5, d: 0, l: 0, p: 5, last5: "WWWWW" }, away: { w: 2, d: 1, l: 2, p: 5, last5: "WDLWL" } },
+  { team: "B", position: 10, last5: "LLLDL", home: { w: 1, d: 1, l: 3, p: 5, last5: "LDLLW" }, away: { w: 0, d: 0, l: 5, p: 5, last5: "LLLLL" } },
+  { team: "C", position: 5, last5: "WDWDL", home: { w: 3, d: 1, l: 1, p: 5, last5: "WWDLW" }, away: { w: 1, d: 2, l: 2, p: 5, last5: "DDLWL" } },
+];
+test("formPoints and ordinal", () => { assert.equal(formPoints("WWDLL"), 7); assert.equal(ordinal(1), "1st"); assert.equal(ordinal(11), "11th"); assert.equal(ordinal(22), "22nd"); });
+test("matchPreviews uses table data, falls back to fixture form, and gives a venue edge", () => {
+  const round = { fixtures: [{ home: "A", away: "B" }, { home: "X", away: "Y", form: { home: ["W", "D"], away: ["L"] } }] };
+  const p = matchPreviews(round, TF);
+  assert.equal(p[0].home.pos, 1); assert.equal(p[0].away.last5, "LLLDL"); assert.equal(p[0].edge, 15 - 0);
+  assert.equal(p[1].home.pos, null); assert.equal(p[1].home.last5, "WD"); assert.equal(p[1].edge, null);
+  assert.deepEqual(matchPreviews(null, TF), []);
+});
+test("lmsBest ranks by form, skips used teams and played games, keeps unknown teams last", () => {
+  const fx = [{ home: "A", away: "B" }, { home: "C", away: "Z" }, { home: "D", away: "E", result: "home" }];
+  const r = lmsBest(fx, TF, new Set(["C"]));
+  assert.deepEqual(r.map(x => x.team), ["A", "B", "Z"]);
+  assert.equal(r[0].venue, "home"); assert.equal(r[2].score, null);
+  assert.equal(lmsBest([{ home: "A", away: "B", result: "postponed" }], TF).length, 2);
+});
+test("pickTypeRecord and teamRecord work from saved fixtures and results, and ignore old rows", () => {
+  const row = (preds, results) => ({ series: 1, week: 4, preds, results, fixtures: [{ home: "A", away: "B" }, { home: "C", away: "D" }] });
+  const h = [row({ 0: "home", 1: "away" }, ["home", "home"]), row({ 0: "home", 1: "draw" }, ["home", "draw"]), { series: 1, week: 3, preds: { 0: "home" } }];
+  const r = pickTypeRecord(h);
+  assert.equal(r.weeks, 1); assert.equal(r.home.n, 2); assert.equal(r.home.pct, 100); assert.equal(r.away.pct, 0); assert.equal(r.draw.pct, 100);
+  assert.equal(pickTypeRecord([{ preds: { 0: "home" } }]), null);
+  const many = Array.from({ length: 3 }, () => row({ 0: "home", 1: "away" }, ["home", "home"]));
+  const t = teamRecord(many);
+  assert.equal(t.best[0].team, "A"); assert.equal(t.best[0].pct, 100); assert.equal(t.worst[0].team, "D"); assert.equal(t.worst[0].pct, 0);
+  assert.ok(t.worst.every(w => !t.best.some(b => b.team === w.team)));
+  assert.equal(teamRecord(many.slice(0, 2)), null);                       // fewer than 3 picks per team
+});

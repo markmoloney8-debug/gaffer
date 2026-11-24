@@ -343,3 +343,20 @@ test("mapResults still takes a corrected final score from the feed", () => {
   const byId = new Map([[1, { id: 1, status: "FINISHED", score: { fullTime: { home: 2, away: 1 } } }]]);
   assert.deepEqual(results.mapResults(fx, prev, byId, () => {})[0], { result: "home", score: "2-1" });
 });
+
+test("archive rows keep the week's fixtures and results", () => {
+  const prev = { week: 4, fixtures: [{ home: "A", away: "B" }, { home: "C", away: "D" }], results: [{ result: "home" }, { result: "draw" }] };
+  const { rows } = fixtures.buildArchive(prev, [{ group_id: "g1", username: "a", entry_name: "E", preds: { 0: "home", 1: "draw" } }], () => 1);
+  assert.deepEqual(rows[0].fixtures, [{ home: "A", away: "B" }, { home: "C", away: "D" }]);
+  assert.deepEqual(rows[0].results, ["home", "draw"]);
+});
+test("insertArchive falls back to the old shape when the new columns are missing, and rethrows other errors", async () => {
+  const rows = [{ username: "a", fixtures: [1], results: ["home"], correct: 1 }];
+  const calls = [];
+  const missing = async (m, path, body) => { calls.push(body); if (calls.length === 1) throw new Error("Supabase POST history -> 400: Could not find the 'fixtures' column of 'history'"); };
+  await fixtures.insertArchive(missing, rows, () => {});
+  assert.equal(calls.length, 2); assert.deepEqual(Object.keys(calls[1][0]).sort(), ["correct", "username"]);
+  const boom = async () => { throw new Error("Supabase POST history -> 500: boom"); };
+  await assert.rejects(() => fixtures.insertArchive(boom, rows, () => {}), /boom/);
+  const ok = []; await fixtures.insertArchive(async (m, p, b) => ok.push(b), rows, () => {}); assert.equal(ok.length, 1); assert.ok(ok[0][0].fixtures);
+});
