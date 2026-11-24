@@ -4,6 +4,9 @@ name: Fetch weekly fixtures
 on:
   schedule:
     - cron: "0 7 * * 2"       # Tuesdays 07:00 UTC (08:00 in UK summer time)
+    # Retries: GitHub can delay or skip a scheduled run. A scheduled run leaves the round alone while its last match is
+    # unfinished, so once the new round is live these do nothing. They only act if the 07:00 run was missed.
+    - cron: "40 8-12 * * 2"   # Tuesdays, 08:40 to 12:40 UTC, hourly
   workflow_dispatch:
     inputs:
       confirm:

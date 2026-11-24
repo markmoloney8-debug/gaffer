@@ -2,7 +2,9 @@ name: Last Man Standing
 
 on:
   schedule:
-    - cron: "23 */2 * * *"    # every 2 hours
+    - cron: "23 */2 * * *"    # every 2 hours, all week
+    - cron: "7,37 11-23 * * 5,6,0,1"   # Fri to Mon, 11:00-23:59 UTC: every 30 minutes on match days (GitHub can delay or skip a run, so the next one is never far away)
+    - cron: "7,37 0-12 * * 2"          # Tuesday morning: every 30 minutes, so the next gameweek opens soon after the last one settles
   workflow_dispatch:
     inputs:
       dry_run:
