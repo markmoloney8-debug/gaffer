@@ -79,3 +79,31 @@ export async function newWorld(browser, bundle, { loginAs, setup, kickoff = 48 *
   await page.goto(ORIGIN + path);
   return { page, fake, tables, errors, context, close: () => context.close() };
 }
+
+// Click a button by name, first finding it through the new navigation if it isn't on screen:
+// Home has two game tiles and an account menu; The Gaffer hub holds My predictions / This run / Season / Form guide.
+const MENU = /^(My profile|My groups|Send feedback|How to play|Admin tools|Sign out|Admin)\b/i;
+const HUB = /^(My predictions|This run|Season|Form guide)\b/i;
+export async function navClick(page, name) {
+  const src = name instanceof RegExp ? name.source.replace(/^\^/, "") : String(name);
+  const here = page.getByRole("button", { name });
+  const menu = page.getByRole("menuitem", { name }), tile = page.getByTestId("tile-gaffer");
+  const vis = async l => (await l.count()) > 0 && await l.first().isVisible().catch(() => false);
+  // Wait for the page to settle on either this button, the Home tiles or the account button before deciding.
+  await Promise.race([here.first().waitFor({ timeout: 8000 }), tile.waitFor({ timeout: 8000 }), page.getByRole("button", { name: "Account menu" }).waitFor({ timeout: 8000 })]).catch(() => {});
+  if (await vis(here)) return here.first().click();
+  const probe = src.replace(/\\/g, "");
+  const legacy = { "My Predictions": "My predictions", "Lobby": "This run", "The Story So Far": "Season", "My Profile": "My profile", "My Groups": "My groups", "Admin Panel": "Admin" };
+  const alias = legacy[probe.replace(/\(.*$/, "")] ;
+  if (alias) return navClick(page, new RegExp(alias, "i"));
+  if (/^Last Man/i.test(probe)) { await page.getByTestId("tile-lms").click(); return; }
+  if (MENU.test(probe) || /^(My profile|My groups|Send feedback|How to play|Sign out)/i.test(probe)) {
+    await page.getByRole("button", { name: "Account menu" }).click();
+    return page.getByRole("menuitem", { name }).first().click();
+  }
+  if (HUB.test(probe)) {
+    if (await vis(tile)) await tile.click();
+    return page.getByRole("button", { name }).first().click();
+  }
+  return here.first().click();   // let Playwright report the normal "not found" error
+}

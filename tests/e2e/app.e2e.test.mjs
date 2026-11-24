@@ -1,7 +1,7 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { buildApp, launch, newWorld, picks, ADMIN_PIN, HOUR } from "./harness.mjs";
+import { buildApp, launch, newWorld, picks, ADMIN_PIN, HOUR, navClick } from "./harness.mjs";
 
 let bundle, browser;
 before(async () => { bundle = await buildApp(); browser = await launch(); });
@@ -15,7 +15,7 @@ async function world(opts) {
   const w = await newWorld(browser, bundle, opts);
   w.text = (t, timeout = 8000) => w.page.getByText(t, { exact: false }).first().waitFor({ timeout });
   w.gone = (t, timeout = 4000) => w.page.getByText(t, { exact: false }).first().waitFor({ state: "hidden", timeout });
-  w.click = async name => { await w.page.getByRole("button", { name }).first().click(); };
+  w.click = name => navClick(w.page, name);
   return w;
 }
 async function run(opts, body) {
@@ -43,7 +43,7 @@ test("registering needs a valid invite code and lands the player in that group",
 
     await w.page.getByPlaceholder("Ask the admin").fill("beta22");          // lower case is fine
     await w.click(/Create Account/);
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     await w.text("newbie · Beta");
     assert.deepEqual(w.tables.memberships.filter(m => m.username === "newbie").map(m => m.group_id), ["g-beta"]);
   });
@@ -129,7 +129,7 @@ test("a player can join a second group, switch between them, and entries stay se
     await w.text("Invalid invite code");
     await w.page.getByPlaceholder("e.g. GAFFERMATES26").fill("beta22");
     await w.click(/Join Group/);
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     assert.deepEqual(w.tables.memberships.filter(m => m.username === "ann").map(m => m.group_id).sort(), ["g-alpha", "g-beta"]);
 
     const select = w.page.locator("select").first();
@@ -147,7 +147,7 @@ test("a player can join a second group, switch between them, and entries stay se
 test("the last group a player used is remembered", async () => {
   await run({ loginAs: "ann", setup: t => t.memberships.push({ username: "ann", group_id: "g-beta" }) }, async w => {
     await w.page.locator("select").first().selectOption("g-beta");
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     await w.page.reload();
     await w.page.locator("select").first().waitFor();
     assert.equal(await w.page.locator("select").first().inputValue(), "g-beta");
@@ -309,20 +309,24 @@ test("the story page totals entries and accuracy across rounds, and hides this r
 
 // ── Light and dark mode ────────────────────────────────────────────────────
 const theme = w => w.page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+async function toggleTheme(w) {
+  if (!(await w.page.getByRole("menuitem", { name: /Theme/ }).count())) await w.page.getByRole("button", { name: "Account menu" }).click();
+  await w.page.getByRole("menuitem", { name: /Theme/ }).click();
+}
 const pageBg = w => w.page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 
 test("light and dark mode: a toggle switches, changes the look, and is remembered", async () => {
   await run({ loginAs: "ann" }, async w => {
     const before = await theme(w), bgBefore = await pageBg(w);
     assert.ok(before === "light" || before === "dark");
-    await w.page.getByRole("button", { name: /Switch between light and dark/ }).click();
+    await toggleTheme(w);
     const after = await theme(w);
     assert.notEqual(after, before);
     assert.notEqual(await pageBg(w), bgBefore, "the page background should change");
     await w.page.reload();
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     assert.equal(await theme(w), after, "the choice survives a reload");
-    await w.page.getByRole("button", { name: /Switch between light and dark/ }).click();
+    await toggleTheme(w);
     assert.equal(await theme(w), before);
   });
 });
@@ -343,7 +347,7 @@ test("a player can pick an avatar, and other players see it", async () => {
     await w.page.getByRole("button", { name: "Avatar 🦁" }).click();
     await w.page.getByRole("button", { name: "Colour #60a5fa" }).click();
     await w.click(/Save profile/);
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     const ann = w.tables.users.find(u => u.username === "ann");
     assert.equal(ann.avatar, "🦁");
     assert.equal(ann.avatar_color, "#60a5fa");
@@ -362,7 +366,7 @@ test("choosing 'my initial' removes the avatar", async () => {
     await w.click(/My Profile/);
     await w.page.getByRole("button", { name: "Use my initial" }).click();
     await w.click(/Save profile/);
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     assert.equal(w.tables.users.find(u => u.username === "ann").avatar, null);
   });
 });
@@ -468,7 +472,7 @@ test("a signed-in player opening an invite link lands on Join with the code fill
     await w.text("My Groups");
     assert.equal(await w.page.getByPlaceholder("e.g. GAFFERMATES26").inputValue(), "BETA22");
     await w.click(/Join Group/);
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     assert.ok(w.tables.memberships.some(m => m.username === "ann" && m.group_id === "g-beta"));
   });
 });
@@ -491,7 +495,7 @@ test("a player can start their own group, becomes its first member, and gets a w
     await w.click(/My Groups/);
     await w.page.getByLabel("New group name").fill("Sunday League");
     await w.click(/Create group/);
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     const g = w.tables.groups.find(x => x.name === "Sunday League");
     assert.ok(g, "group saved");
     assert.equal(g.created_by, "ann");
@@ -708,7 +712,7 @@ test("the admin can dismiss a reset request without changing anyone's password",
 
 test("a player can change their own password, then sign in with the new one only", async () => {
   await run({ loginAs: "ann" }, async w => {
-    await w.page.getByRole("button", { name: "Profile" }).first().click().catch(async () => { await w.page.getByLabel(/profile/i).first().click(); });
+    await w.click(/My Profile/);
     await w.page.getByLabel("New password").fill("abc");
     await w.click("Change");
     await w.text("at least 6 characters");
@@ -782,7 +786,7 @@ test("help: new visitors can read how to play on the sign-in page; players can o
     await w.text("Get all 5 right and you win");
     await w.text("What if a match is postponed?");
     await w.click(/Back/);
-    await w.text("My Predictions");
+    await w.text("Last Man Standing");
   });
 });
 
@@ -827,7 +831,7 @@ test("with two groups, a banner says which one you're playing in and follows the
   await run({ loginAs: "ann", setup: t => t.memberships.push({ username: "ann", group_id: "g-beta" }) }, async w => {
     const banner = () => w.page.getByRole("status").filter({ hasText: "Playing in" }).first().innerText();
     await w.page.locator("select").first().selectOption("g-alpha");
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     assert.match(await banner(), /Playing in\s+Alpha/i);
     await w.click(/Lobby/);
     assert.match(await banner(), /Alpha/, "still shown on other screens");
@@ -838,7 +842,7 @@ test("with two groups, a banner says which one you're playing in and follows the
 
 test("with one group there is no banner (the name is already in the top bar)", async () => {
   await run({ loginAs: "bob" }, async w => {
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     assert.equal(await w.page.getByText("Playing in").count(), 0);
   });
 });
@@ -959,7 +963,7 @@ test("backing out of an edit changes nothing, and a new entry afterwards starts 
 // ── Recovery email ─────────────────────────────────────────────────────────
 test("profile: add a recovery email, see it waiting, then remove it", async () => {
   await run({ loginAs: "ann" }, async w => {
-    await w.click(/Profile|ann/);
+    await w.click(/My Profile/);
     await w.page.getByLabel("Recovery email address").fill("not-an-email");
     await w.click("Save");
     await w.text("doesn't look like an email");
@@ -1027,7 +1031,7 @@ test("crest avatars: pick one, it is saved in a short form, and shows as an imag
     await w.click(/My Profile/);
     await w.page.getByRole("button", { name: "Avatar Eagle crest" }).click();
     await w.click(/Save profile/);
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     assert.equal(w.tables.users.find(u => u.username === "ann").avatar, "i:eagle");
     assert.ok("i:eagle".length <= 8, "fits the avatar column limit");
     await w.click(/Lobby/);
@@ -1086,13 +1090,13 @@ const lmsGw = (offsetH = 24, extra = {}) => ({ id: 11, season: "2026-27", matchd
 test("LMS: opens from the menu and shows 'No game running yet' to a non-owner", async () => {
   await run({ loginAs: "bob" }, async w => {
     w.fake.lms.gameweek = lmsGw();
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     await w.click(/Last Man Standing/);
     await w.text("No game running yet");
     assert.equal(await w.page.evaluate(() => location.pathname), "/lms");
     assert.equal(await w.page.getByRole("button", { name: /Start Last Man Standing/ }).count(), 0);
     await w.click(/Back/);
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     assert.equal(await w.page.evaluate(() => location.pathname), "/");
   });
 });
@@ -1100,7 +1104,7 @@ test("LMS: opens from the menu and shows 'No game running yet' to a non-owner", 
 test("LMS: owner starts a game, picks a team, can change it, and the board shows the tick", async () => {
   await run({ loginAs: "bob" }, async w => {
     w.fake.lms.gameweek = lmsGw(); w.fake.lms.manager = "bob";
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     await w.click(/Last Man Standing/);
     await w.click(/Start Last Man Standing/);
     await w.text("Still standing (1)");
@@ -1118,7 +1122,7 @@ test("LMS: used teams are greyed out and cannot be picked; the server's error me
     const gw = lmsGw(); w.fake.lms.gameweek = gw;
     w.fake.lms.comp = { id: "c1", group_id: "g-alpha", name: "LMS", status: "running", winners: [], startGameweek: 9, startMatchday: 8 };
     w.fake.lms.entries = [{ username: "bob", status: "alive", cycleFrom: 9, picks: [{ gameweek: 9, matchday: 8, team: "Spurs", matchId: 1, outcome: "win" }] }];
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     await w.click(/Last Man Standing/);
     await w.text("Matchday 10");
     assert.equal(await w.page.getByRole("button", { name: /Spurs \(already used\)/ }).isDisabled(), true);
@@ -1153,7 +1157,7 @@ test("LMS: board separates knocked-out players, shows pick history, and finished
       { username: "bob", status: "alive", cycleFrom: 9, picks: [{ gameweek: 9, matchday: 8, team: "Spurs", matchId: 1, outcome: "win" }] },
       { username: "ann", status: "out", outMatchday: 9, cycleFrom: 9, picks: [{ gameweek: 9, matchday: 8, team: "Villa", matchId: 2, outcome: "draw" }] },
     ];
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     await w.click(/Last Man Standing/);
     await w.text("Last man standing");
     await w.text("Knocked out");
@@ -1177,7 +1181,7 @@ test("LMS: when a game finishes, the organiser can start the next one straight a
     w.fake.lms.gameweek = lmsGw(); w.fake.lms.manager = "bob";
     w.fake.lms.comp = { id: "c0", group_id: "g-alpha", name: "LMS", status: "finished", winners: ["ann"], startGameweek: 9, startMatchday: 8 };
     w.fake.lms.entries = [{ username: "ann", status: "alive", cycleFrom: 9, picks: [] }];
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     await w.click(/Last Man Standing/);
     await w.click(/Start a new game/);
     await w.text("Still standing (1)");
@@ -1188,7 +1192,7 @@ test("LMS: when a game finishes, the organiser can start the next one straight a
 test("LMS: the page explains how to play", async () => {
   await run({ loginAs: "bob" }, async w => {
     w.fake.lms.gameweek = lmsGw();
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     await w.click(/Last Man Standing/);
     await w.page.getByText("How to play", { exact: true }).click();
     await w.text("You can't pick the same team twice");
@@ -1288,7 +1292,7 @@ test("LMS: after the deadline the board shows each pick, green for a win, red fo
       { username: "cat", status: "alive", cycleFrom: 9, picks: pick("Villa", 502) },
       { username: "dan", status: "alive", cycleFrom: 9, picks: [] },
     ];
-    await w.text("Weekly Football Prediction League");
+    await w.text("Last Man Standing");
     await w.click(/Last Man Standing/);
     await w.text("Still standing (4)");
     const label = u => w.page.locator(`[aria-label^="${u}'s pick"]`).getAttribute("aria-label");

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, createContext, useContext } from "react";
 import { emailFor } from "../supabase/functions/auth/handler.js";
 import LmsView from "./Lms.jsx";
+import { HomeView, AvatarMenu, GafferHub, RunGrid, HowToPlayView, FormGuide } from "./Nav.jsx";
 import { deadlineTs, isDeadlinePassed, msUntilDeadline, fmtCountdown, hit, isPerfect, scoreEntry } from "./logic.js";
 
 // ─── CSS ──────────────────────────────────────────────────────────────────────
@@ -446,15 +447,15 @@ function PinModal({ onSuccess, onCancel }) {
 // ─── How to play + FAQ ────────────────────────────────────────────────────────
 const HOW_TO_PLAY = [
   "Each week you pick home, draw or away for 5 randomly selected Premier League fixtures.",
-  `You can make up to ${MAX_ENTRIES} entries a week. Each one is a separate set of picks.`,
+  `You can make up to ${MAX_ENTRIES} entries a week. Each one is a separate set of picks and costs £1 into the group pot.`,
   "You can edit your entries until they lock, 1 minute before the first kick-off. Until then, nobody can see anyone else's picks.",
   "Get all 5 right and you win. If more than one person does, you share it.",
-  "If nobody gets all 5, the run carries on to next week and everyone's entries keep adding up on The Story So Far.",
+  "If nobody gets all 5, the run carries on to next week and everyone's entries keep adding up on Season. A run can last several weeks.",
 ];
 const FAQ = [
-  ["What does it cost?", "Nothing. It's a game between friends. If you enjoy it, there's a tip link on the results screen."],
+  ["What does it cost?", "One entry is £1. Every entry made since the last win goes in the pot, and the winner (or winners) share it. Your hub shows your entries and the pot for the current run."],
   ["Can I change an entry once I've made it?", "Yes, until entries lock (1 minute before the first kick-off). Open My Entries and tap Edit. After that, entries are sealed."],
-  ["What if a match is postponed?", "The admin either voids it, which counts it as correct for everyone, or swaps in a replacement. If it's replaced, you re-pick just that match from the Lobby."],
+  ["What if a match is postponed?", "The admin either voids it, which counts it as correct for everyone, or swaps in a replacement. If it's replaced, you re-pick just that match from This run."],
   ["Why can't I see everyone else's picks?", "They stay hidden until entries lock, so nobody can copy. After the lock, picks are revealed in stages."],
   ["Who wins?", "Anyone who gets all 5 right in a week. Nobody gets 5? The run carries on and the entries keep adding up."],
   ["How do I invite friends or start my own group?", "Tap My Groups on the home screen. There you can share an invite link for your group, or create a new group of your own (up to 3)."],
@@ -674,6 +675,8 @@ export default function App() {
   const [countdown, setCountdown] = useState(null);
   const [appReady,  setAppReady]  = useState(false); // initial load complete
   const [history,   setHistory]   = useState([]);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [homeLms, setHomeLms] = useState(null);
   const [groupId,   setGroupId]   = useState(null);
   const [myGroups,  setMyGroups]  = useState([]);
   const [joinCode,  setJoinCode]  = useState("");
@@ -962,6 +965,25 @@ export default function App() {
     setLoading(false);
   }
 
+  const navUi = {Screen,BackBtn,Btn,Ico,GroupMark,Avatar};
+  function goTo(t) {
+    if (t==="story") return openStory();
+    if (t==="profile") return openProfile();
+    if (t==="feedback") { setFbNote(""); setError(""); setView("feedback"); return; }
+    if (t==="join") { setJoinErr(""); setJoinCode(""); setView("join"); return; }
+    if (t==="admin") return requireAdmin("admin");
+    if (t==="reveal") return startReveal();
+    setView(t);
+  }
+  // The home tiles and the hub need the run history and the Last Man Standing state.
+  useEffect(() => {
+    if (!appReady || !groupId || !["home","gaffer","form"].includes(view)) return;
+    let live = true;
+    db.getHistory(groupId).then(h=>{ if (live) setHistory(h); }).catch(()=>{});
+    sb.rpc("lms_state",{p_group:groupId}).then(x=>{ if (live) setHomeLms(x); }).catch(()=>{ if (live) setHomeLms(null); });
+    return () => { live = false; };
+  }, [view, groupId, appReady]);
+
   async function openStory() {
     setError("");
     try { setHistory(await db.getHistory(groupId)); } catch { setHistory([]); }
@@ -1066,8 +1088,9 @@ export default function App() {
       if (!fresh.locked) await db.patchRound({ locked:true });   // already locked? nothing to change (and the database only lets the admin re-lock)
       setRound(await db.getRound(groupId));
       setResults(parsed); setView("reveal");
-    } catch {
-      setError("Couldn't load results — try again later.");
+    } catch (e) {
+      const why = String((e && e.message) || "").replace(/\s+/g," ").slice(0,140);
+      setError("Couldn't load results — try again later." + (why ? " (" + why + ")" : ""));
     }
     setLoading(false);
   }
@@ -1100,7 +1123,9 @@ export default function App() {
   // ── Reveal complete ───────────────────────────────────────────────────────
   async function onRevealComplete(winners) {
     if (winners.length>0) {
-      await db.patchRound({ locked:true });
+      // The round is normally locked by now. Only try if it isn't, and never let that stop the win being recorded
+      // (the database only lets the admin re-lock a round that is already locked).
+      if (!round.locked) { try { await db.patchRound({ locked:true }); } catch {} }
       await db.setGroupWinners(groupId, true);
       const r = await db.getRound(groupId);
       setRound(r);
@@ -1158,7 +1183,6 @@ export default function App() {
       <div className="gnav" style={{...S.nav,...(myGroups.length>1&&groupId?{borderBottom:`3px solid hsl(${groupHue(groupId)} 65% 52%)`}:{})}}>
         <div style={S.navLogo} onClick={()=>setView("home")}><img src="/favicon-48.png" alt="" width={18} height={18} style={{verticalAlign:"middle",marginRight:5}}/>THE GAFFER</div>
         <div className="gnav-id">
-          <Avatar name={username} size={24}/>
           <span style={{fontSize:13,color:"var(--muted)",flexShrink:myGroups.length>1?0:1,maxWidth:myGroups.length>1?"36vw":"100%",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{username}{myGroups.length===1&&groupName?` · ${groupName}`:""}</span>
           {myGroups.length>1&&(
             <select value={groupId||""} onChange={e=>switchGroup(e.target.value)} aria-label="Switch group"
@@ -1168,13 +1192,15 @@ export default function App() {
           )}
         </div>
         <div className="gnav-tools">
-          <button style={S.navBtn} onClick={toggleTheme} aria-label="Switch between light and dark mode"><Ico n={theme==="dark"?"sun":"moon"} size={18} mr={0}/></button>
-          <button style={S.navBtn} onClick={signOut}>Sign out</button>
+          <button style={{...S.navBtn,padding:4,borderRadius:999,minWidth:44,minHeight:44,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setMenuOpen(true)} aria-label="Account menu" aria-haspopup="menu" aria-expanded={menuOpen}><Avatar name={username} size={32}/></button>
         </div>
       </div>
 
+      {menuOpen&&<AvatarMenu ui={navUi} username={username} isAdmin={isAdmin} groupCount={myGroups.length} theme={theme}
+        onTheme={toggleTheme} go={goTo} onSignOut={signOut} onClose={()=>setMenuOpen(false)}/>}
+
       {/* Which group am I in? Shown when you belong to more than one. */}
-      {myGroups.length>1&&groupId&&["home","submit","lobby","story","reveal"].includes(view)&&(()=>{
+      {myGroups.length>1&&groupId&&["home","gaffer","form","submit","lobby","story","reveal"].includes(view)&&(()=>{
         const h = groupHue(groupId);
         return (
           <div role="status" aria-label={`Playing in ${groupName}`} style={{display:"flex",justifyContent:"center",padding:"8px 16px",marginTop:"var(--navh)",marginBottom:"calc(var(--navh) * -1 + 22px)",background:`hsl(${h} 65% 52% / 0.2)`,borderBottom:`3px solid hsl(${h} 65% 52%)`}}>
@@ -1188,44 +1214,23 @@ export default function App() {
 
       {/* ── HOME ── */}
       {view==="home"&&(
-        <Screen>
-          <div style={S.bigLogo}>
-            <Crest size={104}/>
-            <div style={S.bigTitle}>THE GAFFER</div>
-            <div style={S.bigSub}>Weekly Football Prediction League</div>
-            {groupName&&<div style={{marginTop:12,display:"inline-block",padding:"6px 18px",borderRadius:999,fontSize:18,fontWeight:800,color:"var(--text)",
-              border:`2px solid hsl(${groupHue(groupId)} 65% 52%)`,background:`hsl(${groupHue(groupId)} 65% 52% / 0.18)`}}><GroupMark emoji={curGroup&&curGroup.emoji} size={28}/>{curGroup?curGroup.name:groupName}</div>}
-          </div>
-          <div style={{display:"flex",flexDirection:"column",gap:10,width:"100%",maxWidth:360}}>
-            <Btn gold onClick={()=>{setEntryView("list");setView("submit");}} disabled={!round||round.locked||deadlineLocked}>
-              <Ico n="predict"/>My Predictions
-            </Btn>
-            <Btn onClick={()=>setView("lobby")} disabled={!round}><Ico n="lobby"/>Lobby</Btn>
-            <Btn onClick={openStory}><Ico n="story"/>The Story So Far</Btn>
-            <Btn onClick={()=>setView("lms")}><Ico n="lms"/>Last Man Standing</Btn>
-            <Btn onClick={()=>{setJoinErr("");setJoinCode("");setView("join");}}><Ico n="groups"/>My Groups</Btn>
-            <Btn onClick={openProfile}><Ico n="profile"/>My Profile</Btn>
-            <Btn onClick={()=>setView("help")}><Ico n="help"/>How to play</Btn>
-            <Btn onClick={()=>{setFbNote("");setError("");setView("feedback");}}><Ico n="feedback"/>Send feedback</Btn>
-          </div>
-          {round?(
-            <div style={S.pill}>
-              {groupName&&<><span style={{fontWeight:600}}>{groupName}</span><span style={{color:"var(--muted)",margin:"0 8px"}}>·</span></>}
-              <span style={{color:"var(--gold)",fontWeight:600}}>{round.league.flag} {round.league.name}</span>
-              <span style={{color:"var(--muted)",margin:"0 8px"}}>·</span>
-              <span style={{color:"var(--muted)"}}>{roundDates(round)}</span>
-              <span style={{color:"var(--muted)",margin:"0 8px"}}>·</span>
-              <span style={{color:"var(--muted)"}}>{subs.length} entr{subs.length!==1?"ies":"y"}</span>
-              {(round.locked||deadlineLocked)&&<span style={{color:"var(--red)",marginLeft:8,fontSize:11}}><Ico n="lock" size={14} mr={4}/>Locked</span>}
-              {!round.locked&&!deadlineLocked&&countdown&&<span style={{color:"var(--gold)",marginLeft:8,fontSize:11,fontFamily:"'Bebas Neue',sans-serif",letterSpacing:"0.1em"}}>⏱ {countdown}</span>}
-            </div>
-          ):(
-            <div style={{color:"var(--muted)",fontSize:13,textAlign:"center"}}>No active round — waiting for the admin.</div>
-          )}
-          <button style={S.adminLink} onClick={()=>requireAdmin("admin")}>
-            <Ico n="admin" size={18}/>{isAdmin?"Admin Panel":"Admin"}
-          </button>
-        </Screen>
+        <>
+        <HomeView ui={navUi} username={username} groupName={groupName} curGroup={curGroup} groupId={groupId}
+          hue={groupId?groupHue(groupId):0} round={round} subs={subs} closed={deadlineLocked} countdown={countdown}
+          st={homeLms} onGaffer={()=>setView("gaffer")} onLms={()=>setView("lms")}/>
+        <div style={{textAlign:"center",fontSize:12,color:"var(--muted)",padding:"0 16px 24px"}}>Results update by themselves, usually within the hour. Stats and the pot update on Tuesday mornings.</div>
+        </>
+      )}
+
+      {view==="gaffer"&&(
+        <GafferHub ui={navUi} username={username} round={round} subs={subs} history={history} closed={deadlineLocked} countdown={countdown}
+          canReveal={!!round&&(round.locked||deadlineLocked)&&!round.winnersFound&&subs.length>0} error={error}
+          onBack={()=>setView("home")} go={goTo}/>
+      )}
+
+      {view==="form"&&(
+        <FormGuide ui={navUi} username={username} round={round} subs={subs} history={history} st={homeLms}
+          picksOut={!!round&&(round.locked||deadlineLocked)} onBack={()=>setView("gaffer")}/>
       )}
 
       {/* ── ADMIN PANEL ── */}
@@ -1274,7 +1279,7 @@ export default function App() {
                 <div style={{fontSize:12,color:"var(--muted)",lineHeight:1.6,marginTop:12}}>
                   <b>Postponed match?</b> <b>Void</b> counts it as correct for everyone. To <b>replace</b> it instead, run{" "}
                   <code style={{color:"var(--gold)"}}>node replace-fixture.js 3</code> (use the match number) in the scripts folder.
-                  Players then re-pick just that match from the Lobby.
+                  Players then re-pick just that match from This run.
                 </div>
               </>
             ) : (
@@ -1383,7 +1388,7 @@ export default function App() {
             <div style={{color:"var(--muted)",fontSize:14,lineHeight:1.7}}>
               {round.winnersFound?"This round has a winner!":"All matches have been played. Check the lobby for results."}
             </div>
-            <div style={{maxWidth:280,margin:"24px auto 0"}}><Btn onClick={()=>setView("lobby")}>👥 Go to Lobby</Btn></div>
+            <div style={{maxWidth:280,margin:"24px auto 0"}}><Btn onClick={()=>setView("lobby")}>👥 Go to This run</Btn></div>
           </div>
         </Screen>
       )}
@@ -1486,10 +1491,10 @@ export default function App() {
       {/* ── LOBBY ── */}
       {view==="lobby"&&round&&(
         <Screen wide>
-          <BackBtn onClick={()=>setView("home")}/>
+          <BackBtn onClick={()=>setView("gaffer")}/>
           <SectionTitle
             eyebrow={`${round.league.flag} ${round.league.name} · ${roundDates(round)}`}
-            title={round.winnersFound?"Round Complete 🏆":"The Lobby"}
+            title={round.winnersFound?"Round Complete 🏆":"This run"}
             sub={`${subs.length} entr${subs.length!==1?"ies":"y"} across ${new Set(subs.map(s=>s.username)).size} player${new Set(subs.map(s=>s.username)).size!==1?"s":""}`}
           />
 
@@ -1551,6 +1556,7 @@ export default function App() {
           })()}
 
           <div style={{width:"100%",marginBottom:24}}>
+            {(round.locked||deadlineLocked)&&subs.length>0&&<RunGrid round={round} subs={subs}/>}
             <div style={S.sectionLabel}>Players In</div>
             {(()=>{
               const players=[...new Set(subs.map(s=>s.username))];
@@ -1665,7 +1671,7 @@ export default function App() {
                   <div style={{fontSize:10,color:"var(--muted)",letterSpacing:"0.08em",textTransform:"uppercase"}}>{l}</div>
                 </div>
               ))}
-              <div style={{gridColumn:"1 / -1",fontSize:11,color:"var(--muted)",textAlign:"center"}}>From completed rounds across all your groups · {myStats.wins} win{myStats.wins!==1?"s":""}</div>
+              <div style={{gridColumn:"1 / -1",fontSize:11,color:"var(--muted)",textAlign:"center"}}>From completed rounds across all your groups · {myStats.wins} win{myStats.wins!==1?"s":""}<br/>Updated every Tuesday morning, when the week is wrapped up. This week's picks count from then.</div>
             </div>
           )}
           <div style={{width:"100%"}}>
@@ -1754,11 +1760,7 @@ export default function App() {
 
       {/* ── STORY SO FAR ── */}
       {view==="help"&&(
-        <Screen>
-          <BackBtn onClick={()=>setView("home")}/>
-          <SectionTitle eyebrow="The Gaffer" title="How to play"/>
-          <HelpContent/>
-        </Screen>
+        <HowToPlayView ui={navUi} gaffer={HOW_TO_PLAY} faq={FAQ} onBack={()=>setView("home")}/>
       )}
 
       {view==="lms"&&appReady&&(
@@ -1768,7 +1770,7 @@ export default function App() {
 
       {view==="story"&&(
         <StoryView history={history} round={round} subs={subs}
-          series={storySeries} setSeries={setStorySeries} onBack={()=>setView("home")}/>
+          series={storySeries} setSeries={setStorySeries} onBack={()=>setView("gaffer")}/>
       )}
 
       {/* ── REVEAL ── */}
@@ -1892,8 +1894,8 @@ function StoryView({ history, round, subs, series, setSeries, onBack }) {
   return (
     <Screen wide>
       <BackBtn onClick={onBack}/>
-      <SectionTitle eyebrow="The Gaffer" title="The Story So Far"
-        sub="Entries keep adding up until somebody gets all 5 right."/>
+      <SectionTitle eyebrow="The Gaffer" title="Season"
+        sub="Entries keep adding up until somebody gets all 5 right. Stats (accuracy, best score, wins) update every Tuesday morning, when the week is wrapped up and a new round starts."/>
 
       {allSeries.length>1&&(
         <select value={sel} onChange={e=>setSeries(Number(e.target.value))} style={{...S.input,maxWidth:260}}>
@@ -1978,6 +1980,8 @@ function RevealView({ round, results, subs, onRevealComplete, onHome, onLobby, r
   const playedCount = finalCount;
 
   function next() { setRevealedCount(n=>Math.min(n+1, finalCount)); }
+  // Skip the one-at-a-time reveal: show every result now, and go straight to the outcome when they are all in.
+  function skip() { setRevealedCount(finalCount); if (allFinal) finish(); }
   function finish() {
     const winners = subs.filter(e=>isPerfect(e,results));
     const out = { winners, hasWinner:winners.length>0 };
@@ -2049,7 +2053,12 @@ function RevealView({ round, results, subs, onRevealComplete, onHome, onLobby, r
             })}
           </div>
           {revealedCount<finalCount
-            ? <Btn gold onClick={next} style={{maxWidth:320}}>Reveal next result →</Btn>
+            ? (
+                <div style={{width:"100%",maxWidth:320,display:"flex",flexDirection:"column",gap:10}}>
+                  <Btn gold onClick={next}>Reveal next result →</Btn>
+                  <Btn onClick={skip}>{allFinal?"Skip to the outcome":"Show all results now"}</Btn>
+                </div>
+              )
             : allFinal
               ? <Btn gold onClick={finish} style={{maxWidth:320}}>See the Outcome →</Btn>
               : (
@@ -2058,7 +2067,7 @@ function RevealView({ round, results, subs, onRevealComplete, onHome, onLobby, r
                       {round.fixtures.length-finalCount} match{round.fixtures.length-finalCount!==1?"es":""} still to come.<br/>
                       Come back after the remaining matches. Results are picked up automatically.
                     </div>
-                    <Btn onClick={onLobby}>← Lobby</Btn>
+                    <Btn onClick={onLobby}>← This run</Btn>
                   </div>
                 )}
         </>
@@ -2153,7 +2162,7 @@ function RevealView({ round, results, subs, onRevealComplete, onHome, onLobby, r
 
               <div style={{display:"flex",gap:10,flexWrap:"wrap",justifyContent:"center",width:"100%",maxWidth:360}}>
                 {isAdmin&&<Btn gold onClick={()=>requireAdmin("admin")} style={{flex:1}}>📅 Admin Panel</Btn>}
-                <Btn onClick={onLobby} style={{flex:1}}>← Lobby</Btn>
+                <Btn onClick={onLobby} style={{flex:1}}>← This run</Btn>
               </div>
             </>
           )}
