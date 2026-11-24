@@ -676,6 +676,7 @@ export default function App() {
   const [appReady,  setAppReady]  = useState(false); // initial load complete
   const [history,   setHistory]   = useState([]);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [formFrom, setFormFrom] = useState("gaffer");   // which game the Form guide was opened from
   const [homeLms, setHomeLms] = useState(null);
   const [groupId,   setGroupId]   = useState(null);
   const [myGroups,  setMyGroups]  = useState([]);
@@ -973,6 +974,7 @@ export default function App() {
     if (t==="join") { setJoinErr(""); setJoinCode(""); setView("join"); return; }
     if (t==="admin") return requireAdmin("admin");
     if (t==="reveal") return startReveal();
+    if (t==="form") setFormFrom("gaffer");
     setView(t);
   }
   // The home tiles and the hub need the run history and the Last Man Standing state.
@@ -1230,7 +1232,7 @@ export default function App() {
 
       {view==="form"&&(
         <FormGuide ui={navUi} username={username} round={round} subs={subs} history={history} st={homeLms}
-          picksOut={!!round&&(round.locked||deadlineLocked)} onBack={()=>setView("gaffer")}/>
+          picksOut={!!round&&(round.locked||deadlineLocked)} startGame={formFrom} onBack={()=>setView(formFrom==="lms"?"lms":"gaffer")}/>
       )}
 
       {/* ── ADMIN PANEL ── */}
@@ -1764,7 +1766,7 @@ export default function App() {
       )}
 
       {view==="lms"&&appReady&&(
-        <LmsView username={username} sb={sb} groups={myGroups} groupId={groupId} onBack={()=>setView("home")}
+        <LmsView username={username} sb={sb} groups={myGroups} groupId={groupId} onBack={()=>setView("home")} onForm={()=>{ setFormFrom("lms"); setView("form"); }}
           ui={{Screen,BackBtn,Btn,Loader,ErrorBox,Ico,GroupMark,AvatarBubble,S,TIP_URL,gLabel}}/>
       )}
 
