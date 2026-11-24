@@ -60,7 +60,7 @@ export function fmtLeft(ms) {
 }
 const errText = e => { const m = String((e && e.message) || e || ""); try { const j = JSON.parse(m); return j.message || m; } catch { return m; } };
 
-export default function LmsView({ ui, sb, username, groups, groupId: initialGroup, onBack }) {
+export default function LmsView({ ui, sb, username, groups, groupId: initialGroup, onBack, onForm }) {
   const { Screen, BackBtn, Btn, Loader, ErrorBox, Ico, GroupMark, AvatarBubble, S, TIP_URL, gLabel } = ui;
   const [gid, setGid] = useState(initialGroup && groups.some(g => g.id === initialGroup) ? initialGroup : (groups[0] && groups[0].id) || null);
   const [st, setSt] = useState(null);
@@ -131,6 +131,7 @@ export default function LmsView({ ui, sb, username, groups, groupId: initialGrou
         {HOW.map((t, i) => <li key={i}>{t}</li>)}
       </ol>
     </details>
+    {onForm && <Btn onClick={onForm}>Form guide</Btn>}
     {groups.length > 1 && (
       <select value={gid || ""} onChange={e => setGid(e.target.value)} aria-label="Group" style={{...S.input, maxWidth: 360}}>
         {groups.map(g => <option key={g.id} value={g.id}>{gLabel(g)}</option>)}

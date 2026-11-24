@@ -145,6 +145,25 @@ test("non-admin: Form guide cards collapse, pin to the top and follow players; c
     await w.text("No game running");
   });
 });
+test("non-admin: Form guide shows last week's scores from history", async () => {
+  const setup = t => t.history.push({ group_id: "g-alpha", series: 1, week: 3, username: "ann", entry_name: "E", correct: 4, total: 5, perfect: false },
+                                      { group_id: "g-alpha", series: 1, week: 3, username: "bob", entry_name: "E", correct: 2, total: 5, perfect: false });
+  await run({ loginAs: "bob", kickoff: open, setup }, async w => {
+    await w.tile("tile-gaffer").click();
+    await w.page.getByRole("button", { name: /Form guide/ }).click();
+    await w.text("Last week (week 3)");
+    await w.text("4 of 5");
+    await w.text("2 of 5");
+  });
+});
+test("non-admin: Form guide tells you when hidden-pick cards will fill in", async () => {
+  await run({ loginAs: "bob", kickoff: open }, async w => {
+    await w.tile("tile-gaffer").click();
+    await w.page.getByRole("button", { name: /Form guide/ }).click();
+    await w.text("No entries yet. Once people enter, picks stay hidden until entries close");
+    assert.ok(await w.page.getByText(/first kick-off/).count() > 0);
+  });
+});
 test("non-admin: sign out from the account menu returns to the sign-in page", async () => {
   await run({ loginAs: "bob" }, async w => {
     await w.menu(/Sign out/);
@@ -155,5 +174,23 @@ test("admin: menu shows Admin tools and opens the panel", async () => {
   await run({ loginAs: "ann" }, async w => {
     await w.menu(/Admin/);
     await w.page.locator('input[type="password"]').waitFor();     // PIN gate still applies
+  });
+});
+test("non-admin: Form guide is reachable from Last Man Standing, opens on that game, and Back returns there", async () => {
+  await run({ loginAs: "bob" }, async w => {
+    await w.tile("tile-lms").click();
+    await w.page.getByRole("button", { name: "Form guide" }).click();
+    await w.text("FORM GUIDE");
+    assert.equal(await w.page.getByRole("button", { name: "Last Man Standing" }).getAttribute("aria-pressed"), "true");
+    await w.page.getByRole("button", { name: "The Gaffer" }).click();            // and you can still switch games
+    assert.equal(await w.page.getByRole("button", { name: "The Gaffer" }).getAttribute("aria-pressed"), "true");
+    await w.page.getByRole("button", { name: /Back/ }).first().click();
+    await w.page.getByRole("button", { name: "Form guide" }).waitFor();            // back on the Last Man Standing page
+    await w.text("Last Man Standing");
+  });
+  await run({ loginAs: "bob" }, async w => {                                      // from The Gaffer it still opens on The Gaffer
+    await w.tile("tile-gaffer").click();
+    await w.page.getByRole("button", { name: /Form guide/ }).click();
+    assert.equal(await w.page.getByRole("button", { name: "The Gaffer" }).getAttribute("aria-pressed"), "true");
   });
 });

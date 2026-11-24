@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { gafferTile, lmsTile, runStats } from "./runstats.js";
 import { HOW as LMS_HOW, lmsStats } from "./Lms.jsx";
-import { crowdSplit, contrarians, crowdRecord, hotCold } from "./formstats.js";
+import { crowdSplit, contrarians, crowdRecord, hotCold, lastWeek } from "./formstats.js";
 
 // New navigation screens. They take the shared UI helpers as `ui` (same pattern as Lms.jsx) to avoid circular imports.
 const TONE = {
@@ -190,9 +190,9 @@ export function HowToPlayView({ ui, gaffer, faq, onBack, start = "gaffer" }) {
 const LS = k => { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch { return null; } };
 const LSset = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 
-export function FormGuide({ ui, username, round, subs, history, st, picksOut, onBack }) {
+export function FormGuide({ ui, username, round, subs, history, st, picksOut, startGame = "gaffer", onBack }) {
   const { Screen, BackBtn } = ui;
-  const [game, setGame] = useState("gaffer");
+  const [game, setGame] = useState(startGame);
   const [pins, setPins] = useState(() => LS("gaffer.pins") || []);
   const [shut, setShut] = useState(() => LS("gaffer.shut") || []);
   const [watch, setWatch] = useState(() => LS("gaffer.watch") || []);
@@ -204,20 +204,24 @@ export function FormGuide({ ui, username, round, subs, history, st, picksOut, on
   const row = (a, b) => <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13, padding: "4px 0" }}><span>{a}</span><span style={{ color: "var(--muted)", textAlign: "right" }}>{b}</span></div>;
 
   const cards = [];
+  const f0 = round && round.fixtures && round.fixtures[0];
+  const when = f0 ? ` (first kick-off ${f0.date} ${f0.time})` : "";
+  const hidden = <div style={{ fontSize: 13, color: "var(--muted)" }}>Everyone's picks stay hidden until entries close{when}. This fills in then.</div>;
   if (game === "gaffer") {
     const cs = round ? crowdSplit(round, subs) : [];
-    const hc = hotCold(history);
+    const hc = hotCold(history), lw = lastWeek(history);
+    cards.push({ id: "g-last", title: lw ? `Last week (week ${lw.week})` : "Last week", body: lw ? lw.players.map(p => row(<span>{star(p.username)}{p.username}</span>, `${p.correct} of ${p.total} · ${p.entries} entr${p.entries === 1 ? "y" : "ies"}`)) : later });
     cards.push({ id: "g-hot", title: "Who's hot and who's not", body: hc ? <>
       {hc.map(p => row(<span>{star(p.username)}{p.username}</span>, `${p.recent}% lately · ${p.season}% season ${p.diff > 0 ? "▲" : p.diff < 0 ? "▼" : ""}`))}</> : later });
-    cards.push({ id: "g-crowd", title: "How the group is picking", body: !round || !subs.length ? <div style={{ fontSize: 13, color: "var(--muted)" }}>No entries yet.</div>
-      : !picksOut ? <div style={{ fontSize: 13, color: "var(--muted)" }}>Picks stay hidden until entries close, then this shows how everyone split.</div>
+    cards.push({ id: "g-crowd", title: "How the group is picking", body: !round || !subs.length ? <div style={{ fontSize: 13, color: "var(--muted)" }}>No entries yet. Once people enter, picks stay hidden until entries close{when}.</div>
+      : !picksOut ? hidden
       : cs.map(c => row(`${c.homeTeam} v ${c.awayTeam}`, `${c.topPick === "home" ? c.homeTeam : c.topPick === "away" ? c.awayTeam : "Draw"} ${c.topShare}%`)) });
-    cards.push({ id: "g-home", title: "Most picked to win at home", body: !picksOut || !cs.length ? <div style={{ fontSize: 13, color: "var(--muted)" }}>Appears once picks are out.</div>
+    cards.push({ id: "g-home", title: "Most picked to win at home", body: !picksOut || !cs.length ? hidden
       : cs.slice().sort((a, b) => (b.n ? b.home / b.n : 0) - (a.n ? a.home / a.n : 0)).map(c => row(c.homeTeam, `${c.n ? Math.round(c.home / c.n * 100) : 0}% back them`)) });
     const co = picksOut && round ? contrarians(round, subs) : [];
-    cards.push({ id: "g-contra", title: "Going against the crowd", body: co.length ? co.slice(0, 5).map(c => row(<span>{star(c.username)}{c.username}</span>, `${c.pct}% of picks off the favourite`)) : <div style={{ fontSize: 13, color: "var(--muted)" }}>Needs three or more entries with picks out.</div> });
+    cards.push({ id: "g-contra", title: "Going against the crowd", body: co.length ? co.slice(0, 5).map(c => row(<span>{star(c.username)}{c.username}</span>, `${c.pct}% of picks off the favourite`)) : (!picksOut ? hidden : <div style={{ fontSize: 13, color: "var(--muted)" }}>Needs three or more entries to compare.</div>) });
     const rec = picksOut && round ? crowdRecord(round, subs) : null;
-    cards.push({ id: "g-crowdrec", title: "Is the crowd right?", body: rec && rec.played ? <>{row("Favourite pick came in", `${rec.right} of ${rec.played} played`)}{rec.worst && row("Biggest upset", `${rec.worst.homeTeam} v ${rec.worst.awayTeam} (only ${rec.worst.share}% backed it)`)}</> : <div style={{ fontSize: 13, color: "var(--muted)" }}>Appears once matches have been played.</div> });
+    cards.push({ id: "g-crowdrec", title: "Is the crowd right?", body: rec && rec.played ? <>{row("Favourite pick came in", `${rec.right} of ${rec.played} played`)}{rec.worst && row("Biggest upset", `${rec.worst.homeTeam} v ${rec.worst.awayTeam} (only ${rec.worst.share}% backed it)`)}</> : (!picksOut ? hidden : <div style={{ fontSize: 13, color: "var(--muted)" }}>Appears once matches have been played.</div>) });
     cards.push({ id: "g-form", title: "Team form (last 5)", body: round && round.fixtures.some(f => f.form) ? round.fixtures.map(f => f.form ? row(`${f.home} v ${f.away}`, `${(f.form.home || []).join("") || "–"} | ${(f.form.away || []).join("") || "–"}`) : null) : <div style={{ fontSize: 13, color: "var(--muted)" }}>No form data for this week yet.</div> });
   } else {
     const entries = (st && st.entries) || [], comp = st && st.competition;
