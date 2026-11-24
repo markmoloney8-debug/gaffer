@@ -18,3 +18,11 @@ test("hotCold needs two weeks", () => {
   const r = hotCold([h(1,"a",1),h(2,"a",5),h(3,"a",5),h(1,"b",5),h(2,"b",1),h(3,"b",1)], 2);
   assert.equal(r[0].username,"a"); assert.ok(r[0].diff>0); assert.ok(r[1].diff<0);
 });
+import { lastWeek } from "../../src/formstats.js";
+test("lastWeek uses the latest week, best entry per player", () => {
+  const h = (week,u,correct,series=1) => ({series,week,username:u,correct,total:5});
+  const r = lastWeek([h(1,"a",5),h(2,"a",2),h(2,"a",4),h(2,"b",3)]);
+  assert.equal(r.week,2); assert.deepEqual(r.players.map(p=>[p.username,p.correct,p.entries]),[["a",4,2],["b",3,1]]);
+  assert.equal(lastWeek([]),null);
+  assert.equal(lastWeek([h(9,"a",1,1),h(1,"a",3,2)]).week,1);   // a newer run beats a higher week number
+});
