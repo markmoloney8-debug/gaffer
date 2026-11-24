@@ -13,7 +13,7 @@ let counter = 0;
 const uuid = () => `00000000-0000-4000-8000-${String(++counter).padStart(12, "0")}`;
 
 export function createFakeSupabase() {
-  const tables = { users: [], round: [], submissions: [], groups: [], group_state: [], history: [], memberships: [], feedback: [], reset_requests: [], admins: [] };
+  const tables = { users: [], round: [], submissions: [], groups: [], group_state: [], history: [], memberships: [], feedback: [], reset_requests: [], admins: [], team_form: [] };
   const logins = [];                                     // sign-in accounts: { id, email, username, password }
   const addLogin = (username, password) => { const l = { id: `auth-${username}`, email: emailFor(username), username, password }; logins.push(l); return l; };
   const callerOf = req => { const m = (req.headers()["authorization"] || "").match(/^Bearer tok:(.+)$/); return m ? m[1] : null; };
@@ -65,6 +65,52 @@ export function createFakeSupabase() {
     "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
   };
 
+  // ── The database's permission rules (mirrors auth/auth.sql; tests/sql/permissions.test.sql is the source of truth) ──
+  // Anything the real database would refuse must fail here too, otherwise a test signed in as the admin
+  // can pass while a normal player hits an error. `who` is the signed-in username (or null when signed out).
+  const isAdmin = who => tables.admins.some(a => a.username === who);
+  const refuse = message => ({ refuse: message });
+  const entriesOpen = () => { const r = tables.round[0]; if (!r) return true; return Date.now() < Math.min(...r.fixtures.map(f => f.kickoffTs)) - 60000; };
+  function policy(table, method, who, { rows, patch, body }) {
+    if (isAdmin(who)) {
+      if (table === "admins" || ((table === "history" || table === "team_form") && method !== "GET")) return refuse("permission denied for table " + table);   // history is written by scheduled jobs, admins by SQL only
+      return null;
+    }
+    if (table === "admins") return refuse("permission denied for table admins");
+    if (table === "history") return method === "GET" ? null : refuse("permission denied for table history");
+    if (table === "team_form") return method === "GET" ? null : refuse("permission denied for table team_form");   // read-only for players; the scheduled job writes it
+    if (table === "round") {
+      if (method === "GET") return null;
+      if (method === "DELETE") return { scope: () => false };
+      if (method === "POST") return refuse("new row violates row-level security policy for table round");
+      return null;                                                    // PATCH handled by the round_guard check
+    }
+    if (table === "submissions") {
+      if (method === "POST") return (body || []).every(r => r.username === who) ? null : refuse("new row violates row-level security policy");
+      if (method === "PATCH") return { scope: r => r.username === who };
+      if (method === "DELETE") return { scope: r => r.username === who && entriesOpen() };
+    }
+    if (table === "groups" || table === "memberships") return method === "GET" ? null : refuse("permission denied for table " + table);
+    if (table === "group_state" && method === "PATCH") {
+      const mine = new Set(tables.memberships.filter(m => m.username === who).map(m => m.group_id));
+      if (Object.keys(patch || {}).some(k => k !== "winners_found")) return refuse("permission denied for table group_state");
+      return { scope: r => mine.has(r.group_id) };
+    }
+    if (table === "feedback") {
+      if (method === "GET") return { scope: () => false };
+      if (method === "POST") return (body || []).every(r => r.username === who) ? null : refuse("new row violates row-level security policy for table feedback");
+      return { scope: () => false };
+    }
+    if (table === "reset_requests") {
+      if (method === "GET" || method === "PATCH" || method === "DELETE") return { scope: () => false };
+    }
+    if (table === "users" && method === "PATCH") {
+      if (Object.keys(patch || {}).some(k => ["password_hash", "auth_id"].includes(k))) return refuse("permission denied for table users");
+      return { scope: r => r.username === who };
+    }
+    return null;
+  }
+
   async function handle(route) {
     const req = route.request();
     if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
@@ -78,14 +124,20 @@ export function createFakeSupabase() {
     const prefer = req.headers()["prefer"] || "";
     const want = prefer.includes("return=representation");
 
+    const who = callerOf(req);
     try {
       if (req.method() === "GET") {
-        return json(200, shape(tables[table].filter(predicate(url.searchParams)), url.searchParams));
+        const pol = who ? policy(table, "GET", who, {}) : null;
+        if (pol && pol.refuse) return json(403, { code: "42501", message: pol.refuse });
+        let rows = tables[table].filter(predicate(url.searchParams));
+        if (pol && pol.scope) rows = rows.filter(pol.scope);
+        return json(200, shape(rows, url.searchParams));
       }
 
       if (req.method() === "POST") {
         const body = JSON.parse(req.postData() || "null");
         const incoming = Array.isArray(body) ? body : [body];
+        { const pol = who ? policy(table, "POST", who, { body: incoming }) : null; if (pol && pol.refuse) return json(403, { code: "42501", message: pol.refuse }); }
         const saved = [];
         for (const raw of incoming) {
           const refusal = hooks.beforeInsert[table] && hooks.beforeInsert[table](raw);
@@ -107,7 +159,8 @@ export function createFakeSupabase() {
 
       if (req.method() === "PATCH") {
         const patch = JSON.parse(req.postData());
-        const rows = tables[table].filter(predicate(url.searchParams));
+        let rows = tables[table].filter(predicate(url.searchParams));
+        { const pol = who ? policy(table, "PATCH", who, { patch }) : null; if (pol && pol.refuse) return json(403, { code: "42501", message: pol.refuse }); if (pol && pol.scope) rows = rows.filter(pol.scope); }
         if (table === "round" && !tables.admins.some(a => a.username === callerOf(req))) {      // mirrors the database's round_guard trigger
           const onlyLocking = Object.keys(patch).every(k => k === "locked") && patch.locked === true;
           if (rows.some(r => r.locked === true) || !onlyLocking) return json(400, { code: "P0001", message: "Only the admin can change the round" });
@@ -118,7 +171,10 @@ export function createFakeSupabase() {
       }
 
       if (req.method() === "DELETE") {
-        const test = predicate(url.searchParams);
+        const base = predicate(url.searchParams);
+        const pol = who ? policy(table, "DELETE", who, {}) : null;
+        if (pol && pol.refuse) return json(403, { code: "42501", message: pol.refuse });
+        const test = pol && pol.scope ? r => base(r) && pol.scope(r) : base;
         const before = tables[table].length;
         const blocked = hooks.blockDelete && hooks.blockDelete[table];          // simulates the database quietly refusing (e.g. entries locked)
         const removed = blocked ? [] : tables[table].filter(r => test(r));

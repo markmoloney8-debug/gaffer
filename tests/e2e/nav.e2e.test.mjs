@@ -194,3 +194,57 @@ test("non-admin: Form guide is reachable from Last Man Standing, opens on that g
     assert.equal(await w.page.getByRole("button", { name: "The Gaffer" }).getAttribute("aria-pressed"), "true");
   });
 });
+
+// ── Form guide: team form for picking, and the richer history ───────────────────────────────────
+const tf = (team, position, last5, h, a) => ({ team, position, played: 12, won: 6, drawn: 3, lost: 3, gf: 20, ga: 12, points: 21, last5, home: h, away: a });
+const TEAMS = t => t.team_form.push(
+  tf("Arsenal", 1, "WWWWW", { p: 6, w: 6, d: 0, l: 0, gf: 15, ga: 2, last5: "WWWWW" }, { p: 6, w: 4, d: 1, l: 1, gf: 9, ga: 4, last5: "WDWWL" }),
+  tf("Chelsea", 9, "LLWLD", { p: 6, w: 2, d: 2, l: 2, gf: 8, ga: 8, last5: "DLWLD" }, { p: 6, w: 1, d: 1, l: 4, gf: 5, ga: 11, last5: "LLDLL" }));
+test("non-admin: Form guide shows league position, last 5 and home/away records from team form", async () => {
+  await run({ loginAs: "bob", kickoff: open, setup: TEAMS }, async w => {
+    await w.tile("tile-gaffer").click();
+    await w.page.getByRole("button", { name: /Form guide/ }).click();
+    const card = w.page.locator('section[aria-label="This week: form and league position"]');
+    await card.waitFor();
+    await w.text("Arsenal (1st) v Chelsea (9th)");
+    const t = await card.innerText();
+    assert.match(t, /WWWWW/); assert.match(t, /Home: W6 D0 L0/); assert.match(t, /Away: W1 D1 L4/);
+  });
+});
+test("non-admin: Form guide still works before the first team-form update (falls back to fixture form)", async () => {
+  await run({ loginAs: "bob", kickoff: open }, async w => {
+    await w.tile("tile-gaffer").click();
+    await w.page.getByRole("button", { name: /Form guide/ }).click();
+    await w.text("league position and home/away records appear after the first update");
+    await w.text("Arsenal v Chelsea");
+  });
+});
+test("non-admin: Form guide uses saved fixtures and results from past weeks", async () => {
+  const fx = [{ home: "Arsenal", away: "Chelsea" }, { home: "Spurs", away: "Everton" }];
+  const row = (u, preds, results, week) => ({ group_id: "g-alpha", series: 1, week, username: u, entry_name: "E", preds, results, fixtures: fx, correct: 1, total: 2, perfect: false });
+  const setup = t => { for (const wk of [1, 2, 3]) t.history.push(row("ann", { 0: "home", 1: "away" }, ["home", "home"], wk), row("bob", { 0: "home", 1: "draw" }, ["home", "draw"], wk)); };
+  await run({ loginAs: "bob", kickoff: open, setup }, async w => {
+    await w.tile("tile-gaffer").click();
+    await w.page.getByRole("button", { name: /Form guide/ }).click();
+    const types = w.page.locator('section[aria-label="How our picks have landed"]'); await types.waitFor();
+    const t = await types.innerText();
+    assert.match(t, /Home picks\s*100% right \(6\)/); assert.match(t, /Away picks\s*0% right \(3\)/); assert.match(t, /Across 3 saved weeks/);
+    await w.page.locator('section[aria-label="Teams we back right (and wrong)"]').getByText("Arsenal").first().waitFor();
+  });
+});
+test("non-admin: Last Man Standing 'Best teams to pick' ranks by form and leaves out used teams", async () => {
+  await run({ loginAs: "bob", kickoff: open, setup: TEAMS }, async w => {
+    const ko = Date.now() + 24 * HOUR;
+    w.fake.lms.gameweek = { id: 11, season: "2026-27", matchday: 10, status: "open", deadline: new Date(ko - 60000).toISOString(),
+      fixtures: [["Arsenal", "Chelsea"], ["Spurs", "Everton"]].map(([home, away], i) => ({ matchId: i + 1, home, away, kickoffTs: ko, kickoffIso: new Date(ko).toISOString(), date: "Sat", time: "15:00" })) };
+    w.fake.lms.comp = { id: "c1", group_id: "g-alpha", name: "LMS", status: "running", winners: [], startGameweek: 9, startMatchday: 8 };
+    w.fake.lms.entries = [{ username: "bob", status: "alive", cycleFrom: 9, picks: [{ gameweek: 9, matchday: 8, team: "Spurs", matchId: 9, outcome: "win" }] }];
+    await w.tile("tile-lms").click();
+    await w.page.getByRole("button", { name: "Form guide" }).click();
+    const card = w.page.locator('section[aria-label="Best teams to pick this gameweek"]'); await card.waitFor();
+    const t = await card.innerText();
+    assert.ok(t.indexOf("Arsenal") < t.indexOf("Chelsea"), "Arsenal (strong form) ranks above Chelsea");
+    assert.ok(!/^Spurs\b/m.test(t), "Spurs already used, so not offered as a pick");
+    assert.match(t, /Everton/);
+  });
+});
