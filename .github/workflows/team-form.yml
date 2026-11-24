@@ -1,0 +1,26 @@
+name: Team form
+
+on:
+  schedule:
+    - cron: "47 */3 * * *"               # every 3 hours, all week
+    - cron: "27 12-23/2 * * 5,6,0,1"     # Fri to Mon afternoons and evenings: every 2 hours, after the results jobs
+  workflow_dispatch:
+
+concurrency:
+  group: gaffer-team-form
+  cancel-in-progress: false
+
+jobs:
+  form:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Update team form
+        env:
+          FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
+          SB_URL: https://oszrnwhyvmvccxxepsnm.supabase.co
+          SB_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node scripts/team-form.js

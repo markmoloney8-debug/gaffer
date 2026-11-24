@@ -41,8 +41,11 @@ jobs:
           $PSQL -d gaffer_test -f tests/sql/recovery.test.sql
           $PSQL -d gaffer_test -f auth/delete-entry.sql
           $PSQL -d gaffer_test -f tests/sql/delete-entry.test.sql
+          $PSQL -d gaffer_test -f tests/sql/permissions.test.sql
+          $PSQL -d gaffer_test -f auth/form-data.sql
+          $PSQL -d gaffer_test -f tests/sql/form-data.test.sql
       - name: Setup scripts are safe to run twice
-        run: for f in history-setup.sql hardening.sql auth/auth.sql auth/recovery.sql auth/delete-entry.sql; do $PSQL -d gaffer_test -f $f; done
+        run: for f in history-setup.sql hardening.sql auth/auth.sql auth/recovery.sql auth/delete-entry.sql auth/form-data.sql; do $PSQL -d gaffer_test -f $f; done
 
   browser:
     runs-on: ubuntu-latest

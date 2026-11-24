@@ -2,7 +2,7 @@
 // Every screen is checked in both dark and light mode, so a colour change can't quietly make something hard to read.
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp, launch, newWorld, picks, ADMIN_PIN, HOUR } from "./harness.mjs";
+import { buildApp, launch, newWorld, picks, ADMIN_PIN, HOUR, navClick } from "./harness.mjs";
 import { MEASURE } from "./contrast.mjs";
 
 let bundle, browser;
@@ -13,7 +13,7 @@ const entry = (u, g, name, ...p) => ({ username: u, group_id: g, entry_name: nam
 const hist = (u, week, correct, perfect = false) => ({ group_id: "g-alpha", series: 1, week, username: u, entry_name: "Entry 1", correct, total: 5, perfect });
 const win = ["home", "draw", "away", "home", "home"];
 const R = (...r) => r.map(result => ({ result, score: result === "upcoming" || result === "void" ? null : "1-0" }));
-const click = (p, name) => p.getByRole("button", { name }).first().click();
+const click = (p, name) => navClick(p, name);   // finds buttons through the new Home tiles / account menu
 const base = t => { t.history.push(hist("bob", 1, 3), hist("ann", 1, 5, true), hist("ann", 2, 2)); t.submissions.push(entry("ann", "g-alpha", "Entry 1", ...win), entry("bob", "g-alpha", "Entry 1", "away", "away", "away", "away", "away")); t.memberships.push({ username: "ann", group_id: "g-beta" }); };
 
 const SCREENS = [
@@ -25,6 +25,11 @@ const SCREENS = [
   ["my entries", { loginAs: "ann" }, async p => { await click(p, /My Predictions/); }],
   ["new entry", { loginAs: "ann" }, async p => { await click(p, /My Predictions/); await click(p, /Add Entry/); await click(p, "Draw"); }],
   ["story so far", { loginAs: "ann" }, async p => { await click(p, /The Story So Far/); await p.getByText("Week 1").first().click(); }],
+  ["account menu", { loginAs: "ann" }, async p => { await p.getByRole("button", { name: "Account menu" }).click(); }],
+  ["gaffer hub", { loginAs: "ann" }, async p => { await p.getByTestId("tile-gaffer").click(); await p.getByLabel("Your run so far").waitFor(); }],
+  ["this run grid", { loginAs: "ann", kickoff: -3 * HOUR, results: R("home", "home", "upcoming", "upcoming", "upcoming") }, async p => { await click(p, /This run/); await p.getByLabel("Picks grid").waitFor(); }],
+  ["this run by match", { loginAs: "ann", kickoff: -3 * HOUR, results: R("home", "home", "upcoming", "upcoming", "upcoming") }, async p => { await click(p, /This run/); await p.getByRole("button", { name: "By match" }).click(); await p.getByLabel("Picks by match").waitFor(); }],
+  ["form guide", { loginAs: "ann", kickoff: -3 * HOUR, results: R("home", "home", "upcoming", "upcoming", "upcoming") }, async p => { await click(p, /Form guide/); await p.getByText("FORM GUIDE").waitFor(); }],
   ["my groups", { loginAs: "ann" }, async p => { await click(p, /My Groups/); }],
   ["profile", { loginAs: "ann" }, async p => { await click(p, /My Profile/); await p.getByText("Your stats").first().waitFor().catch(() => {}); }],
   ["how to play", { loginAs: "ann" }, async p => { await click(p, /How to play/); await p.getByText("Can I change an entry once").click(); }],

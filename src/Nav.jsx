@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { gafferTile, lmsTile, runStats } from "./runstats.js";
 import { HOW as LMS_HOW, lmsStats } from "./Lms.jsx";
-import { crowdSplit, contrarians, crowdRecord, hotCold, lastWeek } from "./formstats.js";
+import { crowdSplit, contrarians, crowdRecord, hotCold, lastWeek, matchPreviews, lmsBest, pickTypeRecord, teamRecord, ordinal } from "./formstats.js";
 
 // New navigation screens. They take the shared UI helpers as `ui` (same pattern as Lms.jsx) to avoid circular imports.
 const TONE = {
@@ -15,7 +15,7 @@ const pick = (e, i) => e.preds[String(i)] || e.preds[i];
 
 function Pill({ tone, children }) {
   const t = TONE[tone] || TONE.grey;
-  return <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700, color: t.c, background: t.bg, border: `1px solid ${t.c}` }}>{children}</span>;
+  return <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700, color: "var(--text)", background: t.bg, border: `1px solid ${t.c}` }}>{children}</span>;
 }
 function Tile({ title, icon, tile, onClick, testid }) {
   const t = TONE[tile.tone] || TONE.grey;
@@ -126,7 +126,7 @@ export function GafferHub({ ui, username, round, subs, history, closed, countdow
 export function RunGrid({ round, subs }) {
   const [mode, setMode] = useState("grid");
   const fx = round.fixtures, res = i => { const r = round.results && round.results[i] && round.results[i].result; return r && r !== "upcoming" ? r : null; };
-  const tab = k => <button key={k} onClick={() => setMode(k)} aria-pressed={mode === k} style={{ flex: 1, minHeight: 44, borderRadius: 10, border: "1px solid var(--border)", background: mode === k ? "var(--gold)" : "var(--surface)", color: mode === k ? "#1a1500" : "var(--text)", fontWeight: 700, cursor: "pointer" }}>{k === "grid" ? "Grid" : "By match"}</button>;
+  const tab = k => <button key={k} onClick={() => setMode(k)} aria-pressed={mode === k} style={{ flex: 1, minHeight: 44, borderRadius: 10, border: "1px solid var(--border)", background: mode === k ? "var(--gold)" : "var(--surface)", color: mode === k ? "var(--ink)" : "var(--text)", fontWeight: 700, cursor: "pointer" }}>{k === "grid" ? "Grid" : "By match"}</button>;
   const split = i => { const t = { home: 0, draw: 0, away: 0 }; subs.forEach(s => { const p = pick(s, i); if (t[p] != null) t[p]++; }); return t; };
   const Bar = ({ i }) => { const t = split(i), n = subs.length || 1; return (
     <div title={`H ${t.home} · D ${t.draw} · A ${t.away}`} style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "var(--border)" }}>
@@ -172,7 +172,7 @@ export function HowToPlayView({ ui, gaffer, faq, onBack, start = "gaffer" }) {
         <BackBtn onClick={onBack}/>
         <div style={{ display: "flex", gap: 8 }}>
           {[["gaffer", "The Gaffer"], ["lms", "Last Man Standing"]].map(([k, l]) => <button key={k} onClick={() => setTab(k)} aria-pressed={tab === k}
-            style={{ flex: 1, minHeight: 44, borderRadius: 10, border: "1px solid var(--border)", background: tab === k ? "var(--gold)" : "var(--surface)", color: tab === k ? "#1a1500" : "var(--text)", fontWeight: 700, cursor: "pointer" }}>{l}</button>)}
+            style={{ flex: 1, minHeight: 44, borderRadius: 10, border: "1px solid var(--border)", background: tab === k ? "var(--gold)" : "var(--surface)", color: tab === k ? "var(--ink)" : "var(--text)", fontWeight: 700, cursor: "pointer" }}>{l}</button>)}
         </div>
         {tab === "gaffer" ? <>
           <div style={box}><ol style={{ margin: 0, paddingLeft: 20, fontSize: 14, lineHeight: 1.6 }}>{gaffer.map((t, i) => <li key={i} style={{ marginBottom: 6 }}>{t}</li>)}</ol></div>
@@ -190,7 +190,7 @@ export function HowToPlayView({ ui, gaffer, faq, onBack, start = "gaffer" }) {
 const LS = k => { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch { return null; } };
 const LSset = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 
-export function FormGuide({ ui, username, round, subs, history, st, picksOut, startGame = "gaffer", onBack }) {
+export function FormGuide({ ui, username, round, subs, history, st, teamForm = [], picksOut, startGame = "gaffer", onBack }) {
   const { Screen, BackBtn } = ui;
   const [game, setGame] = useState(startGame);
   const [pins, setPins] = useState(() => LS("gaffer.pins") || []);
@@ -209,6 +209,22 @@ export function FormGuide({ ui, username, round, subs, history, st, picksOut, st
   const hidden = <div style={{ fontSize: 13, color: "var(--muted)" }}>Everyone's picks stay hidden until entries close{when}. This fills in then.</div>;
   if (game === "gaffer") {
     const cs = round ? crowdSplit(round, subs) : [];
+    const pv = matchPreviews(round, teamForm), dim = { fontSize: 12, color: "var(--muted)" };
+    const letters = str => <span style={{ letterSpacing: 2, fontWeight: 700 }}>{str || "–"}</span>;
+    cards.push({ id: "g-preview", title: "This week: form and league position", body: pv.length ? <>
+      {pv.map(p => <div key={p.i} style={{ padding: "6px 0", borderTop: p.i ? "1px solid var(--border)" : "none" }}>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>{p.homeTeam}{p.home.pos ? ` (${ordinal(p.home.pos)})` : ""} v {p.awayTeam}{p.away.pos ? ` (${ordinal(p.away.pos)})` : ""}</div>
+        <div style={{ fontSize: 13, display: "flex", justifyContent: "space-between", gap: 8 }}><span>{letters(p.home.last5)}</span><span style={dim}>last 5</span><span>{letters(p.away.last5)}</span></div>
+        {p.home.venue && p.away.venue && <div style={{ fontSize: 12, color: "var(--muted)", display: "flex", justifyContent: "space-between" }}>
+          <span>Home: W{p.home.venue.w} D{p.home.venue.d} L{p.home.venue.l}</span><span>Away: W{p.away.venue.w} D{p.away.venue.d} L{p.away.venue.l}</span></div>}
+      </div>)}
+      <div style={{ ...dim, marginTop: 6 }}>W win, D draw, L loss, newest on the right. Updated every few hours{teamForm.length ? "" : "; league position and home/away records appear after the first update"}.</div></> : <div style={dim}>No fixtures yet.</div> });
+    const ptr = pickTypeRecord(history), tr = teamRecord(history);
+    cards.push({ id: "g-types", title: "How our picks have landed", body: ptr ? <>
+      {row("Home picks", `${ptr.home.pct == null ? "–" : ptr.home.pct + "%"} right (${ptr.home.n})`)}{row("Draw picks", `${ptr.draw.pct == null ? "–" : ptr.draw.pct + "%"} right (${ptr.draw.n})`)}{row("Away picks", `${ptr.away.pct == null ? "–" : ptr.away.pct + "%"} right (${ptr.away.n})`)}
+      <div style={dim}>Across {ptr.weeks} saved week{ptr.weeks === 1 ? "" : "s"}.</div></> : <div style={dim}>Builds up from now on: from this week, each finished week saves the picks and results behind it.</div> });
+    cards.push({ id: "g-teams", title: "Teams we back right (and wrong)", body: tr ? <>
+      {tr.best.map(t => row(t.team, `${t.hit} of ${t.n} right`))}<div style={{ height: 6 }}/>{tr.worst.map(t => row(<span style={{ color: "var(--muted)" }}>{t.team}</span>, `${t.hit} of ${t.n} right`))}</> : <div style={dim}>Needs a few weeks of saved picks (teams backed at least 3 times).</div> });
     const hc = hotCold(history), lw = lastWeek(history);
     cards.push({ id: "g-last", title: lw ? `Last week (week ${lw.week})` : "Last week", body: lw ? lw.players.map(p => row(<span>{star(p.username)}{p.username}</span>, `${p.correct} of ${p.total} · ${p.entries} entr${p.entries === 1 ? "y" : "ies"}`)) : later });
     cards.push({ id: "g-hot", title: "Who's hot and who's not", body: hc ? <>
@@ -228,6 +244,14 @@ export function FormGuide({ ui, username, round, subs, history, st, picksOut, st
     const alive = entries.filter(e => e.status === "alive");
     const ls = comp ? lmsStats(entries) : null;
     cards.push({ id: "l-surv", title: "Still standing", body: comp ? <>{row("Alive", `${alive.length} of ${entries.length}`)}{alive.map(e => row(<span>{star(e.username)}{e.username}</span>, `${(e.picks || []).filter(p => p.outcome === "win").length} wins`))}</> : <div style={{ fontSize: 13, color: "var(--muted)" }}>No game running in this group.</div> });
+    const me = entries.find(e => e.username === (st && st.me));
+    const usedNow = new Set(me ? (me.picks || []).filter(p => p.outcome === "win" && p.gameweek >= me.cycleFrom).map(p => p.team) : []);
+    const best = comp && st.gameweek ? lmsBest(st.gameweek.fixtures, teamForm, usedNow).slice(0, 6) : [];
+    cards.push({ id: "l-best", title: "Best teams to pick this gameweek", body: best.length ? <>
+      {best.map(b => row(<span>{b.team} <span style={{ color: "var(--muted)" }}>({b.venue === "home" ? "home v" : "away at"} {b.opp})</span></span>,
+        b.score == null ? "no form data yet" : <span><span style={{ letterSpacing: 2, fontWeight: 700 }}>{b.last5}</span>{b.pos ? ` · ${ordinal(b.pos)}` : ""}</span>))}
+      <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>Leaves out teams you've already used. Ranked on recent form, form at that ground and how far above the opponent they are. A guide, not a promise.</div></>
+      : <div style={{ fontSize: 13, color: "var(--muted)" }}>Appears when a gameweek is open and you're in the game.</div> });
     cards.push({ id: "l-team", title: "Most picked team", body: ls && ls.topTeam ? row(ls.topTeam[0], `${ls.topTeam[1]} picks`) : later });
     cards.push({ id: "l-streak", title: "Longest winning streak", body: ls && ls.topStreak ? row(<span>{star(ls.topStreak.username)}{ls.topStreak.username}</span>, `${ls.topStreak.best} in a row`) : later });
   }
@@ -239,7 +263,7 @@ export function FormGuide({ ui, username, round, subs, history, st, picksOut, st
         <BackBtn onClick={onBack}/>
         <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 34, letterSpacing: 1.5, lineHeight: 1 }}>FORM GUIDE</div>
         <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>Stats and trends to play with. Tap ☆ by a player to follow them. Tap Pin to keep a card at the top. Pins and follows are saved on this device only.</div>
-        <div style={{ display: "flex", gap: 8 }}>{[["gaffer", "The Gaffer"], ["lms", "Last Man Standing"]].map(([k, l]) => <button key={k} onClick={() => setGame(k)} aria-pressed={game === k} style={{ flex: 1, minHeight: 44, borderRadius: 10, border: "1px solid var(--border)", background: game === k ? "var(--gold)" : "var(--surface)", color: game === k ? "#1a1500" : "var(--text)", fontWeight: 700, cursor: "pointer" }}>{l}</button>)}</div>
+        <div style={{ display: "flex", gap: 8 }}>{[["gaffer", "The Gaffer"], ["lms", "Last Man Standing"]].map(([k, l]) => <button key={k} onClick={() => setGame(k)} aria-pressed={game === k} style={{ flex: 1, minHeight: 44, borderRadius: 10, border: "1px solid var(--border)", background: game === k ? "var(--gold)" : "var(--surface)", color: game === k ? "var(--ink)" : "var(--text)", fontWeight: 700, cursor: "pointer" }}>{l}</button>)}</div>
         {watched.length > 0 && <div style={{ background: "var(--surface)", border: "1px solid var(--gold)", borderRadius: 14, padding: 14 }} aria-label="My watchlist">
           <div style={{ fontWeight: 700, marginBottom: 6 }}>My watchlist</div>
           {watched.map(u => { const mine = subs.filter(s => s.username === u).length; const le = ((st && st.entries) || []).find(e => e.username === u);
@@ -249,7 +273,7 @@ export function FormGuide({ ui, username, round, subs, history, st, picksOut, st
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <button onClick={() => toggleShut(c.id)} aria-expanded={!shut.includes(c.id)} style={{ flex: 1, textAlign: "left", background: "none", border: "none", color: "var(--text)", fontWeight: 700, fontSize: 15, minHeight: 36, cursor: "pointer", padding: 0 }}>{shut.includes(c.id) ? "▸ " : "▾ "}{c.title}</button>
             <button onClick={() => togglePin(c.id)} aria-pressed={pins.includes(c.id)} aria-label={`${pins.includes(c.id) ? "Unpin" : "Pin"} ${c.title}`}
-              style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, minHeight: 36, padding: "0 12px", borderRadius: 999, border: "1px solid " + (pins.includes(c.id) ? "var(--gold)" : "var(--border)"), background: pins.includes(c.id) ? "var(--gold)" : "none", color: pins.includes(c.id) ? "#1a1500" : "var(--muted)" }}>{pins.includes(c.id) ? "Pinned" : "Pin"}</button>
+              style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, minHeight: 36, padding: "0 12px", borderRadius: 999, border: "1px solid " + (pins.includes(c.id) ? "var(--gold)" : "var(--border)"), background: pins.includes(c.id) ? "var(--gold)" : "none", color: pins.includes(c.id) ? "var(--ink)" : "var(--muted)" }}>{pins.includes(c.id) ? "Pinned" : "Pin"}</button>
           </div>
           {!shut.includes(c.id) && <div style={{ marginTop: 8 }}>{c.body}</div>}
         </section>)}

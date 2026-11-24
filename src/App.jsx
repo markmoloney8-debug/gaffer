@@ -380,6 +380,9 @@ const db = {
     if (!groupId) return [];
     return sb.get("history", `group_id=eq.${groupId}&order=week.asc`);
   },
+  async getTeamForm() {
+    return sb.get("team_form", "select=*&order=position.asc");      // refreshed by a scheduled job; empty until its first run
+  },
   async clearSubs() {
     return sb.del("submissions", "submitted_at=gte.1970-01-01");
   },
@@ -678,6 +681,7 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [formFrom, setFormFrom] = useState("gaffer");   // which game the Form guide was opened from
   const [homeLms, setHomeLms] = useState(null);
+  const [teamForm, setTeamForm] = useState([]);
   const [groupId,   setGroupId]   = useState(null);
   const [myGroups,  setMyGroups]  = useState([]);
   const [joinCode,  setJoinCode]  = useState("");
@@ -982,6 +986,7 @@ export default function App() {
     if (!appReady || !groupId || !["home","gaffer","form"].includes(view)) return;
     let live = true;
     db.getHistory(groupId).then(h=>{ if (live) setHistory(h); }).catch(()=>{});
+    if (view==="form") db.getTeamForm().then(t=>{ if (live) setTeamForm(t||[]); }).catch(()=>{});
     sb.rpc("lms_state",{p_group:groupId}).then(x=>{ if (live) setHomeLms(x); }).catch(()=>{ if (live) setHomeLms(null); });
     return () => { live = false; };
   }, [view, groupId, appReady]);
@@ -1231,7 +1236,7 @@ export default function App() {
       )}
 
       {view==="form"&&(
-        <FormGuide ui={navUi} username={username} round={round} subs={subs} history={history} st={homeLms}
+        <FormGuide ui={navUi} username={username} round={round} subs={subs} history={history} st={homeLms} teamForm={teamForm}
           picksOut={!!round&&(round.locked||deadlineLocked)} startGame={formFrom} onBack={()=>setView(formFrom==="lms"?"lms":"gaffer")}/>
       )}
 
