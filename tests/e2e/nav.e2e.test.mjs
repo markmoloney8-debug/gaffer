@@ -145,6 +145,17 @@ test("non-admin: Form guide cards collapse, pin to the top and follow players; c
     await w.text("No game running");
   });
 });
+test("non-admin: Form guide shows last week's scores from history", async () => {
+  const setup = t => t.history.push({ group_id: "g-alpha", series: 1, week: 3, username: "ann", entry_name: "E", correct: 4, total: 5, perfect: false },
+                                      { group_id: "g-alpha", series: 1, week: 3, username: "bob", entry_name: "E", correct: 2, total: 5, perfect: false });
+  await run({ loginAs: "bob", kickoff: open, setup }, async w => {
+    await w.tile("tile-gaffer").click();
+    await w.page.getByRole("button", { name: /Form guide/ }).click();
+    await w.text("Last week (week 3)");
+    await w.text("4 of 5");
+    await w.text("2 of 5");
+  });
+});
 test("non-admin: Form guide tells you when hidden-pick cards will fill in", async () => {
   await run({ loginAs: "bob", kickoff: open }, async w => {
     await w.tile("tile-gaffer").click();
