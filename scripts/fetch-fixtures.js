@@ -105,9 +105,23 @@ function buildArchive(prev, subs, seriesOf) {
     rows.push({
       group_id: s.group_id, series: seriesOf(s.group_id), week: prev.week || 1,
       username: s.username, entry_name: s.entry_name, preds: s.preds, correct, total, perfect,
+      // What was played that week, so the app can show trends later (needs auth/form-data.sql; see insertArchive).
+      fixtures: (prev.fixtures || []).map(f => ({ home: f.home, away: f.away })),
+      results: results.map(r => r.result),
     });
   }
   return { rows, winningGroups, allFinal };
+}
+
+// Writes the archive. If the database has not had auth/form-data.sql applied yet, the two newer columns are missing:
+// then save the old shape rather than lose the week's history.
+async function insertArchive(sbFn, rows, log = console.log) {
+  try { return await sbFn("POST", "history", rows, "return=minimal"); }
+  catch (e) {
+    if (!/fixtures|results|PGRST204|column/i.test(String(e.message))) throw e;
+    log("NOTE: history has no fixtures/results columns yet (run auth/form-data.sql). Archiving without them.");
+    return sbFn("POST", "history", rows.map(({ fixtures, results, ...rest }) => rest), "return=minimal");
+  }
 }
 
 async function fdGet(path) {
@@ -194,7 +208,7 @@ async function main() {
       const { rows, winningGroups, allFinal } = buildArchive(prev, subs, seriesOf);
       if (!allFinal) console.log("WARNING: last round's results were not all final. Archiving entries with the results that were available.");
       console.log(`Archiving ${rows.length} entr${rows.length === 1 ? "y" : "ies"} from Week ${prev.week || 1}...`);
-      if (rows.length) await sb("POST", "history", rows, "return=minimal");
+      if (rows.length) await insertArchive(sb, rows);
       for (const gid of winningGroups) { newSeries.set(gid, seriesOf(gid) + 1); console.log(`Group ${gid} had a winner: starting a new run.`); }
     }
   }
@@ -222,7 +236,7 @@ async function main() {
   console.log(`Done. Week ${week} is live. Entries close 1 minute before the first kick-off.`);
 }
 
-module.exports = { pickCandidates, toFixture, buildArchive, roundStillRunning, shuffle };
+module.exports = { pickCandidates, toFixture, buildArchive, insertArchive, roundStillRunning, shuffle };
 
 if (require.main === module) {
   main().catch(err => {
