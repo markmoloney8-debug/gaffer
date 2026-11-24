@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { gafferTile, lmsTile, runStats } from "./runstats.js";
 import { HOW as LMS_HOW, lmsStats } from "./Lms.jsx";
-import { crowdSplit, contrarians, crowdRecord, hotCold } from "./formstats.js";
+import { crowdSplit, contrarians, crowdRecord, hotCold, lastWeek } from "./formstats.js";
 
 // New navigation screens. They take the shared UI helpers as `ui` (same pattern as Lms.jsx) to avoid circular imports.
 const TONE = {
@@ -209,7 +209,8 @@ export function FormGuide({ ui, username, round, subs, history, st, picksOut, st
   const hidden = <div style={{ fontSize: 13, color: "var(--muted)" }}>Everyone's picks stay hidden until entries close{when}. This fills in then.</div>;
   if (game === "gaffer") {
     const cs = round ? crowdSplit(round, subs) : [];
-    const hc = hotCold(history);
+    const hc = hotCold(history), lw = lastWeek(history);
+    cards.push({ id: "g-last", title: lw ? `Last week (week ${lw.week})` : "Last week", body: lw ? lw.players.map(p => row(<span>{star(p.username)}{p.username}</span>, `${p.correct} of ${p.total} · ${p.entries} entr${p.entries === 1 ? "y" : "ies"}`)) : later });
     cards.push({ id: "g-hot", title: "Who's hot and who's not", body: hc ? <>
       {hc.map(p => row(<span>{star(p.username)}{p.username}</span>, `${p.recent}% lately · ${p.season}% season ${p.diff > 0 ? "▲" : p.diff < 0 ? "▼" : ""}`))}</> : later });
     cards.push({ id: "g-crowd", title: "How the group is picking", body: !round || !subs.length ? <div style={{ fontSize: 13, color: "var(--muted)" }}>No entries yet. Once people enter, picks stay hidden until entries close{when}.</div>

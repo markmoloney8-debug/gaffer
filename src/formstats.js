@@ -44,3 +44,15 @@ export function hotCold(history, n = 3) {
   }).filter(Boolean);
   return out.sort((a, b) => b.recent - a.recent);
 }
+
+// Last finished week: each player's best entry, best first. Works from a single week of history.
+export function lastWeek(history) {
+  if (!history || !history.length) return null;
+  const key = h => h.series * 10000 + h.week;
+  const top = Math.max(...history.map(key));
+  const rows = history.filter(h => key(h) === top);
+  const best = {};
+  rows.forEach(h => { const b = best[h.username]; if (!b || h.correct > b.correct) best[h.username] = { username: h.username, correct: h.correct, total: h.total, entries: 0 }; });
+  rows.forEach(h => { best[h.username].entries++; });
+  return { series: rows[0].series, week: rows[0].week, players: Object.values(best).sort((a, b) => b.correct - a.correct || a.username.localeCompare(b.username)) };
+}
