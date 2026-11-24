@@ -29,7 +29,7 @@ export function lmsStats(entries) {
   return { per, topTeam, topStreak: topStreak && topStreak.best > 0 ? topStreak : null };
 }
 
-const HOW = [
+export const HOW = [
   "Everyone picks one Premier League team to win each gameweek. A gameweek is one round of fixtures, including midweek rounds.",
   "If your team wins, you stay in. If it draws or loses, you're out. No pick means you're out too.",
   "You can't pick the same team twice. Once you've used every team, your list starts again.",
